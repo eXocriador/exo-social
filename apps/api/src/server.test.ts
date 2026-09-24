@@ -11,7 +11,7 @@ import { createService } from './service.js';
 import type { Grant } from './scope.js';
 
 const A = 'telegram-archive';
-const KEY = 'relic-claude-0123456789abcdef';
+const KEY = 'relic-claude-0123456789abcdef'; // gitleaks:allow — заглушка тесту, не ключ
 
 function adapterIn(state: { value: LoginState }): Adapter {
   const h = (): AccountHealth => ({
