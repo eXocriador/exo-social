@@ -1,0 +1,6 @@
+/*
+ * Тема, примітиви і їхні класи — @exo/kit-ui на Tailwind 4. Власне тут —
+ * лише те, що утилітою не виражається.
+ */
+@import "tailwindcss";
+@import "@exo/kit-ui/tokens.css";

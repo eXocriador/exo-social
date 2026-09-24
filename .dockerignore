@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.env
+.env.*
+data
+# Smoke Playwright ганяється у своєму контейнері (e2e/run.sh), в образ не їде.
+e2e

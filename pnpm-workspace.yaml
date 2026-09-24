@@ -1,0 +1,18 @@
+# Згенеровано `exo new --kind api` (план модульності §3.2, §5 D2).
+# Пакети в packages/* не знають про продукт, застосунки в apps/* їх збирають —
+# правило те саме, що в @exo/kit: модуль — фабрика з явним конфігом, process.env
+# читає лише apps/api/src/env.ts.
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# Пакети зі стору КОПІЮЮТЬСЯ, а не лінкуються жорстко. Стор спільний між
+# сесіями, а файли в ньому — exo:srv: жорсткий лінк робить файл у node_modules
+# тим самим інодом, і `pnpm install` під іншим користувачем падає на власному
+# chmod. У pnpm 12 це читається САМЕ звідси, ~/.npmrc не діє (filebrowser).
+packageImportMethod: copy
+
+# esbuild ставить свій бінарник postinstall-скриптом; без дозволу pnpm 12 його не
+# запускає, і збірка (build.mjs), vite і vitest падають на старті.
+allowBuilds:
+  esbuild: true

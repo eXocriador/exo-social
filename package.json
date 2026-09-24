@@ -1,0 +1,16 @@
+{
+  "name": "exo-social",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.4.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev:api": "pnpm --filter @exo-social/api dev",
+    "dev:web": "pnpm --filter @exo-social/web dev"
+  }
+}
