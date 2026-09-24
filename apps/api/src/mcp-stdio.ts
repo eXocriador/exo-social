@@ -54,6 +54,11 @@ local.onmessage = (message: JSONRPCMessage) => {
 upstream.onmessage = (message) => void local.send(message);
 upstream.onerror = (error) => process.stderr.write(`relic stdio: ${error.message}\n`);
 local.onclose = () => void upstream.close().finally(() => process.exit(0));
+// Кінець stdin — кінець сесії. StdioServerTransport SDK на `end` не зважає, а
+// після `initialized` клієнтський транспорт тримає відкритий SSE-потік — і
+// процес жив би вічно: `docker exec` клієнта вмирає, міст у контейнері лишається
+// сиротою з десятками МіБ, і так на кожну сесію Claude Code (знайдено 2026-09-24).
+process.stdin.once('end', () => void local.close());
 
 await upstream.start();
 await local.start();
