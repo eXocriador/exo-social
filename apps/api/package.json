@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@exo/kit": "github:eXocriador/exo-kit#v0.11.0",
-    "@modelcontextprotocol/sdk": "1.30.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "fastify": "^5.12.4",
     "ioredis": "^5.6.1",
     "pino": "^9.6.0",
