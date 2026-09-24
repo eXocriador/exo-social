@@ -1,0 +1,2 @@
+# Хибне generic-api-key: заглушка ключа в тесті, не секрет (з d21d598 позначена gitleaks:allow).
+9af128778878217284c3b57c516c55cd8068686d:apps/api/src/server.test.ts:generic-api-key:14
