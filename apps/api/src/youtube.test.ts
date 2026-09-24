@@ -397,8 +397,9 @@ describe('транскрипт', () => {
 
     // Процес не бачить секретів шлюзу.
     const seen = JSON.parse((await import('node:fs')).readFileSync(`${ytdlpPath}.env`, 'utf8')) as { env: Record<string, string>; argv: string[] };
-    expect(Object.keys(seen.env).sort()).toEqual(['HOME', 'LANG', 'NODE_OPTIONS', 'PATH']);
-    expect(seen.argv).toContain('--js-runtimes');
+    expect(Object.keys(seen.env).sort()).toEqual(['HOME', 'LANG', 'PATH']);
+    // Без JS-рушія: челендж плеєра потрібен потокам, а не субтитрам, і коштує ~190 МіБ на запуск.
+    expect(seen.argv).toContain('--no-js-runtimes');
     expect(seen.argv.at(-1)).toBe(`https://www.youtube.com/watch?v=${VID}`);
   });
 

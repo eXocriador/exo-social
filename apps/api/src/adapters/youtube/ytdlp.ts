@@ -30,14 +30,13 @@ export type YtDlpRunner = (args: string[]) => Promise<RunResult>;
 export interface SpawnOptions {
   path: string;
   timeoutMs: number;
-  /** Скільки процесів yt-dlp живе одночасно: кожен — десятки МБ плюс node для JS-челенджу. */
+  /** Скільки процесів yt-dlp живе одночасно (без JS-рушія — ~60 МіБ кожен). */
   concurrency: number;
 }
 
 /**
  * Запуск бінарника. Оточення — мінімальне, без секретів шлюзу: yt-dlp чужий
- * код, і `PRODUCT_KEYS` йому ні до чого. `NODE_OPTIONS` — стеля купи для node,
- * якого yt-dlp кличе розв'язувати JS-челендж плеєра (`--js-runtimes node`).
+ * код, і `PRODUCT_KEYS` йому ні до чого.
  */
 export function spawnYtDlp(opts: SpawnOptions): YtDlpRunner {
   let running = 0;
@@ -65,7 +64,6 @@ export function spawnYtDlp(opts: SpawnOptions): YtDlpRunner {
               PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
               HOME: '/tmp',
               LANG: 'C.UTF-8',
-              NODE_OPTIONS: '--max-old-space-size=128',
             },
           },
           (err, stdout, stderr) => {
@@ -85,7 +83,15 @@ export function spawnYtDlp(opts: SpawnOptions): YtDlpRunner {
   };
 }
 
-/** Шаблон `-O`: лише потрібні поля, одним рядком JSON. */
+/**
+ * Шаблон `-O`: лише потрібні поля, одним рядком JSON.
+ *
+ * `--no-js-runtimes` — свідомо. JS-челендж плеєра (n/sig) потрібен посиланням
+ * на ПОТОКИ, а субтитри й метадані приходять і без нього — ті самі доріжки,
+ * ті самі посилання timedtext без PO-токена (перевірено 2026-09-24). Ціна
+ * челенджу — node поруч із yt-dlp: пік cgroup одного запуску 250 МіБ проти 62,
+ * і два одночасні запуски впирали шлюз у mem_limit (замір — README продукту).
+ */
 const FIELDS = '%(.{id,title,language,duration,subtitles,automatic_captions})j';
 
 export function infoArgs(videoId: string): string[] {
@@ -97,8 +103,7 @@ export function infoArgs(videoId: string): string[] {
     '--no-warnings',
     '--cache-dir',
     '/tmp/yt-dlp-cache',
-    '--js-runtimes',
-    'node',
+    '--no-js-runtimes',
     '--socket-timeout',
     '20',
     '-O',

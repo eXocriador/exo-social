@@ -99,8 +99,9 @@ COPY --from=build /repo/apps/api/dist ./dist
 # побудовою (exo-ai, netwatch). БД немає — обидва рядки прибрати.
 COPY --from=amacneil/dbmate:2.35.1 /usr/local/bin/dbmate /usr/local/bin/dbmate
 COPY apps/api/db/migrations ./db/migrations
-# yt-dlp: root-овий, лише читається й виконується. JS-челендж плеєра він
-# розв'язує через `node` цього ж образу (`--js-runtimes node`), свого не несе.
+# yt-dlp: root-овий, лише читається й виконується. Іде з `--no-js-runtimes`
+# (ytdlp.ts): субтитрам JS-челендж плеєра не потрібен, а node поруч коштував би
+# ~190 МіБ на запуск.
 COPY --from=ytdlp /opt/yt-dlp /opt/yt-dlp
 ENV YTDLP_PATH=/opt/yt-dlp/yt-dlp_linux
 
