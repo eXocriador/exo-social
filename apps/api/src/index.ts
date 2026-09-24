@@ -1,5 +1,5 @@
 /**
- * exo-social — шлюз від продуктів до соцмереж і месенджерів.
+ * relic — шлюз від продуктів до соцмереж і месенджерів.
  *
  * Точка входу — єдине місце, де конфіг (env.ts) стає екземплярами. Міграції
  * тут НЕ котяться: це робить exo-deploy (`MIGRATE=dbmate`) одноразовим
@@ -29,14 +29,14 @@ function loadEnv(): Env {
 }
 
 const env = loadEnv();
-const { logInfo, logWarn, logError } = createLogger({ service: 'exo-social', level: env.logLevel, openobserve: null });
+const { logInfo, logWarn, logError } = createLogger({ service: 'relic', level: env.logLevel, openobserve: null });
 
 let keys;
 try {
   keys = parseProductKeys(env.productKeys);
 } catch (error) {
   if (error instanceof KeyConfigError) {
-    process.stderr.write(`exo-social: ${error.message}\n`);
+    process.stderr.write(`relic: ${error.message}\n`);
     process.exit(2);
   }
   throw error;

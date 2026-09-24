@@ -11,7 +11,7 @@ import { createService } from './service.js';
 import type { Grant } from './scope.js';
 
 const A = 'telegram-archive';
-const KEY = 'exosocial-claude-0123456789abcdef';
+const KEY = 'relic-claude-0123456789abcdef';
 
 function adapterIn(state: { value: LoginState }): Adapter {
   const h = (): AccountHealth => ({
@@ -151,7 +151,7 @@ describe('MCP (Streamable HTTP, stateless)', () => {
       params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
     });
     expect(init.statusCode).toBe(200);
-    expect(init.json().result.serverInfo.name).toBe('exo-social');
+    expect(init.json().result.serverInfo.name).toBe('relic');
     const list = await rpc(a, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const names = list.json().result.tools.map((t: { name: string }) => t.name).sort();
     expect(names).toEqual(['get_messages', 'get_messages_by_date', 'list_chats', 'search_messages']);

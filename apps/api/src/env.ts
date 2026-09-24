@@ -14,7 +14,7 @@ export const schema = {
     describe:
       'Спільний postgres у мережі internal: області ключів (social_scope) і облік (social_call).\n' +
       'Без неї шлюз не стартує: область, яку нема де прочитати, — це відмова, а не «усе».',
-    example: 'postgresql://exo_social:<пароль>@postgres:5432/exo_social?sslmode=disable',
+    example: 'postgresql://relic:<пароль>@postgres:5432/relic?sslmode=disable',
   }),
   REDIS_URL: url({
     optional: true,
@@ -28,8 +28,8 @@ export const schema = {
     secret: true,
     describe:
       'Ключі продуктів: "продукт:секрет" через кому. Ключ НАЗИВАЄ продукт — це ім\'я їде\n' +
-      'в облік і в область. Новий секрет: echo "exosocial-<продукт>-$(openssl rand -hex 20)"',
-    example: 'claude:exosocial-claude-<секрет>',
+      'в облік і в область. Новий секрет: echo "relic-<продукт>-$(openssl rand -hex 20)"',
+    example: 'claude:relic-claude-<секрет>',
   }),
   STDIO_PRODUCT: str({
     default: 'claude',
@@ -55,8 +55,8 @@ export const schema = {
   TELEGRAM_ARCHIVE_URL: url({
     optional: true,
     protocols: ['http', 'https'],
-    describe: 'HTTP API переглядача tg-archive. Порожньо — адаптер вимкнений і не входить у /health/ready.',
-    example: 'http://tg-archive-viewer:8000',
+    describe: 'HTTP API переглядача архіву (mikoshi). Порожньо — адаптер вимкнений і не входить у /health/ready.',
+    example: 'http://mikoshi-viewer:8000',
   }),
   TELEGRAM_ARCHIVE_ACCOUNT: str({
     optional: true,

@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { KeyConfigError, parseProductKeys, readKey } from './keys.js';
 
 describe('PRODUCT_KEYS', () => {
-  const keys = parseProductKeys('claude:exosocial-claude-0123456789, exopost:exosocial-exopost-0123456789');
+  const keys = parseProductKeys('claude:relic-claude-0123456789, exopost:relic-exopost-0123456789');
 
   it('ключ називає продукт', () => {
-    expect(keys.resolve('exosocial-claude-0123456789')).toBe('claude');
-    expect(keys.resolve('exosocial-exopost-0123456789')).toBe('exopost');
-    expect(keys.resolve('exosocial-claude-012345678')).toBeNull();
+    expect(keys.resolve('relic-claude-0123456789')).toBe('claude');
+    expect(keys.resolve('relic-exopost-0123456789')).toBe('exopost');
+    expect(keys.resolve('relic-claude-012345678')).toBeNull();
     expect(keys.resolve(null)).toBeNull();
     expect(keys.products).toEqual(['claude', 'exopost']);
-    expect(keys.secretOf('claude')).toBe('exosocial-claude-0123456789');
+    expect(keys.secretOf('claude')).toBe('relic-claude-0123456789');
   });
 
   it.each([

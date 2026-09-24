@@ -1,11 +1,14 @@
-# exo-social
+# relic
+
+> Чип, через який чужа свідомість бачить твоє життя, — і лише ту його частину,
+> яку ти відкрив. Назва — з Cyberpunk 2077.
 
 Шлюз від продуктів до соцмереж і месенджерів: **ключ продукту**, **область
 дії**, **облік**, **бюджет відповіді**. REST для продуктів і MCP для моделей —
 на одному порту, з одними ключами.
 
-    продукт ──(ключ продукту)──▶ exo-social ──▶ адаптер ──▶ інструмент ──▶ платформа
-    модель (MCP) ─────────────────┘              telegram-archive → Telegram-Archive → Telegram
+    продукт ──(ключ продукту)──▶ relic ──▶ адаптер ──▶ інструмент ──▶ платформа
+    модель (MCP) ────────────┘              telegram-archive → Telegram-Archive → Telegram
 
 Двійник [exo-ai](https://github.com/eXocriador/exo-ai) (шлюз до моделей) за
 механікою і незалежний від нього: шлюзи один про одного не знають. Самарі,
@@ -103,7 +106,7 @@ stateless, відповідь JSON.
 що бачить контейнер лише через `docker exec`:
 
 ```bash
-claude mcp add exo-social -s user -- docker exec -i exo-social-web node dist/mcp-stdio.js
+claude mcp add relic -s user -- docker exec -i relic-web node dist/mcp-stdio.js
 ```
 
 Політика лишається на сервері: область, стеля, бюджет і облік — ті самі.
@@ -116,3 +119,12 @@ pnpm install && pnpm test && pnpm typecheck
 
 Ворота (`typecheck` + `test`) — у стадії `build` образу. Міграції — dbmate
 (`apps/api/db/migrations`), бінарник у образі.
+
+## Ліцензія
+
+MIT — `LICENSE`. Бюджет відповіді — перенесення нашого ж доповнення до форку
+[telegram-archive-mcp](https://github.com/eXocriador/telegram-archive-mcp)
+(сам форк лишається під GPL-3.0 апстріму, і його код сюди не переноситься:
+обхід дня в адаптері — власна реалізація). Інструмент під адаптером —
+[Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), з ним relic
+говорить лише по HTTP.

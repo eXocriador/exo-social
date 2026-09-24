@@ -70,7 +70,7 @@ function fakeFetch(v: Viewer): typeof fetch {
 
 const opts = (v: Viewer, extra: Record<string, unknown> = {}) => ({
   baseUrl: 'http://viewer',
-  user: 'exo-social',
+  user: 'relic',
   pass: 'right',
   account: 'acc',
   fetch: fakeFetch(v),
@@ -194,7 +194,7 @@ describe('курсор get_messages', () => {
   });
 });
 
-describe('обхід дня (collectDay з форку)', () => {
+describe('обхід дня (collectDay)', () => {
   // Повідомлення кожні 10 хв з 2026-09-01 20:00 до 2026-09-03 04:00 UTC, новіші першими.
   const all: Record<string, unknown>[] = [];
   let id = 1;

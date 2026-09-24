@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Згенеровано `exo new exo-social --kind api` з архетипу F3 @exo/kit v0.11.0
+# Згенеровано `exo new exo-social --kind api` (з 2026-09-24 — relic) з архетипу F3 @exo/kit v0.11.0
 # (templates/docker/node-api): плейсхолдери підставлені. Стадії SPA немає — шлюз
 # без вебу; dbmate і міграції — в образі (MIGRATE=dbmate). Далі це файл
 # продукту; `exo upgrade`
@@ -15,7 +15,7 @@
 # exoanima/services/api (бандл, HEALTHCHECK, три ворота). npm-варіант —
 # exo-ai/repo: `npm ci` у base, `npm ci --omit=dev` у prod-deps, решта та сама.
 #
-# Заповнити: apps/api (тека сервісу, напр. apps/api), @exo-social/api (його name у
+# Заповнити: apps/api (тека сервісу, напр. apps/api), @relic/api (його name у
 # package.json), 3000. Поруч — build.mjs: кладеться в apps/api, скрипт
 # `build` сервісу = `node build.mjs`, esbuild — у його devDependencies. У
 # package.json сервісу — `"type": "module"` і скрипти `typecheck`, `test`.
@@ -43,17 +43,17 @@ COPY apps/api ./apps/api
 # Інших робочих областей немає: шлюз без SPA (apps/web знятий, README репо).
 # Сервіс з його робочими областями плюс корінь. Сусідній застосунок (Vite, Next)
 # сюди не ставиться: ні збірці, ні воротам він не потрібен.
-RUN pnpm install --offline --frozen-lockfile --filter "@exo-social/api..." --filter "{.}"
+RUN pnpm install --offline --frozen-lockfile --filter "@relic/api..." --filter "{.}"
 
 # Ворота тут, а не на хості: `node_modules` хоста належать власнику, і бачать
 # вони рівно дерево образу. `typecheck` окремо від збірки обов'язковий — esbuild
 # типи просто стирає, і без цього рядка помилка типів доїхала б у прод.
 # Продукт із вендореним SQL kit — ще й ворота проти двох правд про схему входу
 # (README kit, «Migrations»):
-# RUN pnpm --filter @exo-social/api run migrations:check
-RUN pnpm --filter @exo-social/api run typecheck \
- && pnpm --filter @exo-social/api run test
-RUN pnpm --filter @exo-social/api run build
+# RUN pnpm --filter @relic/api run migrations:check
+RUN pnpm --filter @relic/api run typecheck \
+ && pnpm --filter @relic/api run test
+RUN pnpm --filter @relic/api run build
 
 # ── лише продові залежності сервісу ─────────────────────────────────────────
 # Без `...`: код робочих областей уже вклеєний у бандл, їхні пакети рантайму не
@@ -69,7 +69,7 @@ FROM base AS prod-deps
 COPY packages ./packages
 COPY apps/api/package.json ./apps/api/package.json
 RUN rm -rf node_modules \
- && pnpm install --offline --frozen-lockfile --prod --filter @exo-social/api
+ && pnpm install --offline --frozen-lockfile --prod --filter @relic/api
 
 # ── рантайм ─────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime

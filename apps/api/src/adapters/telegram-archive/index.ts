@@ -274,60 +274,59 @@ export function createTelegramArchive(opts: TelegramArchiveOptions): Adapter {
 }
 
 /**
- * Обхід дня — перенесення `collectDay` форку (`internal/tools/get_by_date.go`).
+ * Обхід одного дня. Власна реалізація: апстрім telegram-archive-mcp вміє те
+ * саме (GPL-3.0), але його код сюди не переноситься — relic під MIT.
  *
- * Іде назад від кінця дня ключовим курсором, доки не перетне початок дня, не
- * отримає порожню сторінку або курсор не перестане рухатись; лишає
- * повідомлення з [start, end). Віддає старіші першими. Коли в дні більше за
- * `limit`, лишаються найстаріші `limit` і `truncated`; пам'ять — не більше
- * 2·limit під час обходу, хоч би скільки було в дні.
+ * Переглядач віддає сторінки новіші першими і гортає ключовим курсором
+ * (`before_date` + `before_id`). Тож день читається ЗАДОМ НАПЕРЕД: від його
+ * кінця до першого повідомлення, старшого за початок. З вікна [start, end)
+ * тримається не більше `limit` рядків, і це найстаріші: кожен новий рядок
+ * обходу старший за всі взяті, тож надлишок відпадає з «нового» кінця черги.
+ * Пам'ять — `limit` рядків плюс множина вже бачених id.
+ *
+ * Зупинка — будь-що з трьох: сторінка порожня; трапився рядок старший за
+ * початок дня; сторінка не принесла жодного нового id (API проігнорував
+ * курсор — без цього обхід крутився б вічно).
  */
 export async function collectDay(
   bounds: { start: number; end: number },
   limit: number,
   page: (cur: { date: string; id: number }) => Promise<unknown[]>,
 ): Promise<{ rows: unknown[]; truncated: boolean }> {
-  let collected: unknown[] = [];
-  let cur = { date: toNaiveUtc(bounds.end), id: 0 };
-  let truncated = false;
+  const window: unknown[] = []; // у порядку обходу: від новіших до старіших
+  const seen = new Set<number>();
+  let overflow = false;
+  let cursor = { date: toNaiveUtc(bounds.end), id: 0 };
 
   for (;;) {
-    const rows = await page(cur);
-    if (rows.length === 0) break;
+    const rows = await page(cursor);
+    let fresh: { id: number; date: string } | null = null;
+    let pastStart = false;
 
-    let stop = false;
-    let last: { id: number; date: string } | null = null;
     for (const raw of rows) {
       const r = raw as { id?: unknown; date?: unknown };
-      const id = typeof r.id === 'number' ? r.id : 0;
+      const id = typeof r.id === 'number' ? r.id : NaN;
       const date = typeof r.date === 'string' ? r.date : '';
-      const ts = parseArchiveTime(date);
-      if (ts === null) throw new AdapterError('down', `переглядач віддав дату, якої не розібрати: ${date.slice(0, 40)}`);
-      last = { id, date };
-      if (ts < bounds.start) {
-        stop = true;
+      const at = parseArchiveTime(date);
+      if (at === null) throw new AdapterError('down', `переглядач віддав дату, якої не розібрати: ${date.slice(0, 40)}`);
+      if (!Number.isFinite(id) || seen.has(id)) continue;
+      seen.add(id);
+      fresh = { id, date };
+      if (at < bounds.start) {
+        pastStart = true;
         break;
       }
-      if (ts >= bounds.end) continue;
-      // Уже бачене: API не поважив курсор.
-      if (cur.id > 0 && id >= cur.id) continue;
-      collected.push(raw);
-      if (collected.length >= 2 * limit) {
-        // Обхід іде новішими першими, найстаріші — в хвості: голову відкинути.
-        collected = collected.slice(collected.length - limit);
-        truncated = true;
+      if (at >= bounds.end) continue;
+      window.push(raw);
+      if (window.length > limit) {
+        window.shift();
+        overflow = true;
       }
     }
-    if (stop) break;
-    // Курсор не зрушив — не крутитись вічно.
-    if (!last || last.id === 0 || (cur.id > 0 && last.id >= cur.id)) break;
-    cur = { date: last.date, id: last.id };
+
+    if (rows.length === 0 || pastStart || fresh === null) break;
+    cursor = fresh;
   }
 
-  if (collected.length > limit) {
-    collected = collected.slice(collected.length - limit);
-    truncated = true;
-  }
-  collected.reverse();
-  return { rows: collected, truncated };
+  return { rows: window.reverse(), truncated: overflow };
 }

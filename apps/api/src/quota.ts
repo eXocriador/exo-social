@@ -19,7 +19,7 @@ import type { RedisCache } from '@exo/kit/infra';
 const KEY_TTL_SECONDS = 172_800;
 
 export function quotaKey(product: string, now: Date = new Date()): string {
-  return `exosocial:product:${product}:${now.toISOString().slice(0, 10).replace(/-/g, '')}`;
+  return `relic:product:${product}:${now.toISOString().slice(0, 10).replace(/-/g, '')}`;
 }
 
 export interface QuotaVerdict {

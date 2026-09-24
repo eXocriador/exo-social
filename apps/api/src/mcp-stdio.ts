@@ -2,7 +2,7 @@
  * stdio-вхід MCP — для Claude Code на хості VPS, у якого немає ні домену, ні
  * host-порту шлюзу:
  *
- *   claude mcp add exo-social -s user -- docker exec -i exo-social-web node dist/mcp-stdio.js
+ *   claude mcp add relic -s user -- docker exec -i relic-web node dist/mcp-stdio.js
  *
  * Це МІСТ, а не другий сервер: кожне повідомлення JSON-RPC зі stdin іде в
  * `http://127.0.0.1:<PORT>/mcp` того самого контейнера з ключем продукту
@@ -20,7 +20,7 @@ import { readEnv } from './env.js';
 import { parseProductKeys } from './keys.js';
 
 function die(message: string): never {
-  process.stderr.write(`exo-social stdio: ${message}\n`);
+  process.stderr.write(`relic stdio: ${message}\n`);
   process.exit(2);
 }
 
@@ -40,19 +40,19 @@ const local = new StdioServerTransport();
 
 local.onmessage = (message: JSONRPCMessage) => {
   upstream.send(message).catch((error: unknown) => {
-    process.stderr.write(`exo-social stdio: ${(error as Error).message}\n`);
+    process.stderr.write(`relic stdio: ${(error as Error).message}\n`);
     // Запит без відповіді повісив би клієнта: відповісти помилкою від імені сервера.
     if ('id' in message && message.id !== undefined && 'method' in message) {
       void local.send({
         jsonrpc: '2.0',
         id: message.id,
-        error: { code: -32603, message: `exo-social недосяжний зсередини контейнера: ${(error as Error).message}` },
+        error: { code: -32603, message: `relic недосяжний зсередини контейнера: ${(error as Error).message}` },
       });
     }
   });
 };
 upstream.onmessage = (message) => void local.send(message);
-upstream.onerror = (error) => process.stderr.write(`exo-social stdio: ${error.message}\n`);
+upstream.onerror = (error) => process.stderr.write(`relic stdio: ${error.message}\n`);
 local.onclose = () => void upstream.close().finally(() => process.exit(0));
 
 await upstream.start();

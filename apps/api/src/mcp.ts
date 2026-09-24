@@ -36,7 +36,7 @@ async function call<T>(fn: () => Promise<T>) {
 const readOnly = { readOnlyHint: true, openWorldHint: true } as const;
 
 export function buildMcpServer(service: Service, ctx: CallContext, version: string): McpServer {
-  const server = new McpServer({ name: 'exo-social', version });
+  const server = new McpServer({ name: 'relic', version });
 
   server.registerTool(
     'list_chats',
