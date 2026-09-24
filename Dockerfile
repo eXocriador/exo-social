@@ -71,6 +71,20 @@ COPY apps/api/package.json ./apps/api/package.json
 RUN rm -rf node_modules \
  && pnpm install --offline --frozen-lockfile --prod --filter @relic/api
 
+# ── yt-dlp: запінений реліз, sha256 перевіряє сам `ADD` ─────────────────────
+# Транскрипти адаптера youtube. Standalone-збірка (PyInstaller, свій Python
+# усередині), а не `pip install` — ні на старті, ні в образі Python немає.
+# Саме `_linux.zip` (onedir), а не однофайловий `yt-dlp_linux`: той на КОЖЕН
+# запуск розпаковує ~95 МБ у /tmp, а запуск тут — на кожен виклик get_transcript.
+# Оновлення — нова пара версія+sha256 з SHA2-256SUMS релізу, разом.
+FROM node:22-bookworm-slim AS ytdlp
+ADD --checksum=sha256:32e72032766bef9199d99d15beb69fd52e46df8f8b06f0d8745db59e04d339e9 \
+    https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux.zip /tmp/yt-dlp.zip
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends unzip \
+ && unzip -q /tmp/yt-dlp.zip -d /opt/yt-dlp \
+ && rm -rf /var/lib/apt/lists/*
+
 # ── рантайм ─────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -85,6 +99,10 @@ COPY --from=build /repo/apps/api/dist ./dist
 # побудовою (exo-ai, netwatch). БД немає — обидва рядки прибрати.
 COPY --from=amacneil/dbmate:2.35.1 /usr/local/bin/dbmate /usr/local/bin/dbmate
 COPY apps/api/db/migrations ./db/migrations
+# yt-dlp: root-овий, лише читається й виконується. JS-челендж плеєра він
+# розв'язує через `node` цього ж образу (`--js-runtimes node`), свого не несе.
+COPY --from=ytdlp /opt/yt-dlp /opt/yt-dlp
+ENV YTDLP_PATH=/opt/yt-dlp/yt-dlp_linux
 
 # ARG в останній стадії: хеш міняється з кожним комітом і не має інвалідувати
 # встановлення й ворота вище. Ціна — новий верхній шар на кожному коміті, тобто
@@ -96,6 +114,8 @@ ENV APP_VERSION=${APP_VERSION}
 # створити тут, до USER, і віддати йому (`install -d -o node -g node <тека>`),
 # а не chown-ити код.
 USER node
+# Ворота від ТОГО, від кого він працюватиме: від root тека 0700 теж «запускається».
+RUN "$YTDLP_PATH" --version
 EXPOSE 3000
 # Ні wget, ні curl у slim-образі немає, node є. `--start-interval` потребує
 # Docker ≥ 25 і працює лише разом зі `--start-period`.

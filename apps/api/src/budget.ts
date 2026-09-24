@@ -20,7 +20,7 @@
  *   • Проєкції `raw_data` → компактне тут немає: її робить адаптер, бо лише
  *     він знає свою сиру форму. Бюджет бачить уже спільну форму (shape.ts).
  */
-import type { Conversation, Message } from './shape.js';
+import type { Conversation, Message, Segment } from './shape.js';
 
 export interface Limits {
   /** Найбільше елементів в одній відповіді, хоч би скільки попросили. */
@@ -72,8 +72,12 @@ export interface FitOptions<E extends object> {
   extra?: E | undefined;
 }
 
-/** Найдовший курсор, під який резервуються байти, коли його ще не видно. */
-const CURSOR_RESERVE = 256;
+/**
+ * Найдовший курсор, під який резервуються байти, коли його ще не видно.
+ * 512, а не 256 (з 2026-09-24, адаптер youtube): курсор коментарів несе
+ * pageToken Data API, а той сам буває за 200 символів.
+ */
+const CURSOR_RESERVE = 512;
 
 /**
  * Скласти обмежену сторінку, зберігаючи рядки з ПОЧАТКУ. Рядки мають іти в
@@ -156,6 +160,58 @@ export function shorten(m: Message, max: number): Message {
     if (over <= 0 || keep === 0) return out;
     keep -= Math.max(over, 1);
   }
+}
+
+export const NOTE_TRANSCRIPT =
+  'The transcript is longer than fits in one answer. Page with cursor=next — or stop once the question is answered.';
+
+/** Сторінка транскрипту. */
+export interface SegmentPage {
+  count: number;
+  truncated: boolean;
+  next?: string;
+  note?: string;
+  segments: Segment[];
+}
+
+/**
+ * Обмежити транскрипт тими самими стелями. Сегмент (≤ 30 с мовлення, сотні
+ * байтів) сам по собі стелі не пробиває, тож укорочення тут немає; перший
+ * потрапляє завжди — інакше курсора не було б.
+ */
+export function fitSegments<E extends object>(
+  limits: Limits,
+  rows: Segment[],
+  opts: { cursorAfter: (i: number) => string; extra: E },
+): E & SegmentPage {
+  let used = byteLength({
+    ...opts.extra,
+    count: limits.maxItems,
+    truncated: true,
+    next: 'x'.repeat(CURSOR_RESERVE),
+    note: NOTE_TRANSCRIPT,
+    segments: [],
+  });
+  const kept: Segment[] = [];
+  let truncated = false;
+  for (const row of rows) {
+    const size = byteLength(row) + 1;
+    if (kept.length > 0 && (kept.length >= limits.maxItems || used + size > limits.maxBytes)) {
+      truncated = true;
+      break;
+    }
+    used += size;
+    kept.push(row);
+  }
+  const next = truncated ? opts.cursorAfter(kept.length - 1) : undefined;
+  return {
+    ...opts.extra,
+    count: kept.length,
+    truncated,
+    ...(next !== undefined && next.length <= CURSOR_RESERVE ? { next } : {}),
+    ...(truncated ? { note: NOTE_TRANSCRIPT } : {}),
+    segments: kept,
+  };
 }
 
 /** Сторінка розмов. */

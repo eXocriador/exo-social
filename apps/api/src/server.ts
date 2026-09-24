@@ -149,6 +149,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     );
   });
 
+  app.get('/v1/conversations/:ref/transcript', async (request, reply) => {
+    const { ref } = request.params as { ref: string };
+    const q = request.query as Record<string, unknown>;
+    return rest(reply, () =>
+      service.getTranscript(ctx(request, 'rest'), { conversation: ref, language: text(q.language), cursor: text(q.cursor) }),
+    );
+  });
+
   // ── MCP, Streamable HTTP, stateless ─────────────────────────────────────
   app.all('/mcp', async (request, reply) => {
     const server = buildMcpServer(service, ctx(request, 'mcp'), version);

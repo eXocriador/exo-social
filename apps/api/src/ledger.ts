@@ -17,6 +17,8 @@ export type Outcome =
   | 'quota'
   /** Стеля частоти платформи. */
   | 'rate_limited'
+  /** Платформа відмовила серверу (бот-перевірка YouTube). */
+  | 'blocked'
   /** Вхід адаптера відхилено. */
   | 'expired'
   /** Інструмент недосяжний або область не прочиталась. */
@@ -35,6 +37,7 @@ export interface CallRecord {
   bytes: number;
   truncated: boolean;
   latencyMs: number;
+  /** Причина відмови і/або витрати платформи (`units=2 ytdlp=1`, meter.ts). */
   detail: string | null;
 }
 

@@ -9,6 +9,7 @@
 
     продукт ──(ключ продукту)──▶ relic ──▶ адаптер ──▶ інструмент ──▶ платформа
     модель (MCP) ────────────┘              telegram-archive → Telegram-Archive → Telegram
+                                            youtube          → Data API v3, yt-dlp → YouTube
 
 Двійник [exo-ai](https://github.com/eXocriador/exo-ai) (шлюз до моделей) за
 механікою і незалежний від нього: шлюзи один про одного не знають. Самарі,
@@ -37,8 +38,9 @@
 | `get_messages` | `GET /v1/conversations/:ref/messages?limit&cursor` |
 | `search_messages` | `GET /v1/conversations/:ref/search?q&limit` |
 | `get_messages_by_date` | `GET /v1/conversations/:ref/by-date?date&timezone&limit` |
+| `get_transcript` | `GET /v1/conversations/:ref/transcript?language&cursor` |
 
-Ще: `GET /v1/adapters` (стан входу кожного адаптера з причиною), `GET /v1/scope`
+Ще: `GET /v1/adapters` (стан входу кожного адаптера з причиною і `limited`), `GET /v1/scope`
 (своя область), `GET /v1/usage` (виклики за добу), `/health/live`,
 `/health/ready` (обидва без ключа). MCP — `POST /mcp`, Streamable HTTP,
 stateless, відповідь JSON.
@@ -49,13 +51,15 @@ stateless, відповідь JSON.
 |---|---|
 | розмова | `ref` (`<адаптер>:<акаунт>:<id>`, стабільний), `name`, `type`, `platform`, `last_message?`, `participants?` |
 | повідомлення | `id`, `date` (ISO, UTC, `Z`), `from?`, `out?`, `text?`, `reply_to?`, `topic?`, `media?`, `fwd?`, `edited?`, `deleted?`, `pinned?`, `cut?` |
+| сегмент транскрипту | `start`, `end` (секунди від початку, до десятих), `text` — рядки субтитрів, злиті до ~30 с |
 
 | код | що це | що робити продуктові |
 |---|---|---|
 | 200 | відповідь є | читати; `truncated: true` → звузити питання або `cursor=next` |
 | 404 `not_found` | розмови немає **або** вона поза областю ключа — невідрізненно | брати ref з `list_chats` |
 | 429 `budget_exhausted` | денна стеля продукту | деградувати, сьогодні не повторювати |
-| 429 `rate_limited` | стеля частоти платформи | повторити пізніше |
+| 429 `rate_limited` | стеля частоти платформи (у YouTube — і вичерпана квота Data API) | повторити пізніше |
+| 502 `platform_blocked` | платформа відмовляє саме серверу (бот-перевірка YouTube для IP датацентру) | **не** повторювати; вхід цілий |
 | 503 `adapter_expired` | вхід адаптера відхилено | людина: перелогінити інструмент |
 | 503 `adapter_down` / `scope_unavailable` | інструмент або БД недосяжні | fail-safe продукту |
 
@@ -83,10 +87,12 @@ stateless, відповідь JSON.
 
 ## Здоров'я бачить вхід адаптера
 
-`/health/ready` несе `checks.<адаптер>`: `ok` / `expired` / `down`. `expired` чи
+`/health/ready` несе `checks.<адаптер>`: `ok` / `expired` / `down` (і `skip` —
+вхід вимкнений конфігом свідомо, як youtube без ключа). `expired` чи
 `down` увімкненого адаптера — **503 проби**: протухлий вхід — це «шлюз
 непридатний», і монітор мусить це бачити, а не дізнатись з обліку. Стеля
-частоти платформи (FloodWait, 429) — не вирок, лише `limited` у `/v1/adapters`.
+частоти платформи (FloodWait, 429, вичерпана квота) і відмова платформи серверу
+(бот-перевірка) — не вирок, лише `limited` з причиною у `/v1/adapters`.
 Проба ходить за розкладом (`ADAPTER_PROBE_INTERVAL_MS`), а не на кожен запит
 монітора: відхилений вхід — теж спроба, а стелі входів у інструментів тісні.
 
@@ -95,6 +101,33 @@ stateless, відповідь JSON.
 | адаптер | інструмент | вхід |
 |---|---|---|
 | `telegram-archive` | HTTP API переглядача [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive) | окремий акаунт переглядача з `allowed_chat_refs: []`; кука `viewer_auth` шлеться руками (вона `Secure`, а шлюз ходить по HTTP у приватній мережі), перелогін на 401 |
+| `youtube` | [YouTube Data API v3](https://developers.google.com/youtube/v3) (коментарі, назви) і [yt-dlp](https://github.com/yt-dlp/yt-dlp) (транскрипти) | входу в акаунт немає, акаунт один — `public`; «вхід» = ключ API (`YOUTUBE_API_KEY`), без нього `skip` |
+
+### youtube
+
+* **Розмова = відео**: `youtube:public:<id>`, `type: video`, `name` — назва. Ref
+  будує викликач: на місці id можна дати й посилання (`watch?v=`, `youtu.be/`,
+  `shorts/`, `live/`, `embed/`) — шлюз зводить його до id **до** області й обліку.
+  `list_chats` відео не показує: відео — не список розмов акаунта. Окремого
+  `resolve` немає: розбір рядка не вартий ще одного інструмента.
+* **Повідомлення = коментарі** (`commentThreads`): гілка, за нею відповіді, які
+  Data API віддає разом із нею (`reply_to` — батьківський коментар); новіші
+  гілки першими. Курсор несе `pageToken` і останній відданий коментар —
+  сторінку, обрізану бюджетом посередині, продовжує без повторів.
+  `get_messages_by_date` — коментарі дня (обхід до 20 сторінок);
+  `search_messages` — `searchTerms`.
+* **Транскрипт** — окремий інструмент `get_transcript`, бо мовлення не
+  «повідомлення»: ні автора, ні id. Субтитри автора мовою відео, інакше
+  розпізнане YouTube (`source: manual | auto`); `language` — інша мова. Сторінки
+  гортаються з кешу (година), yt-dlp — один запуск на відео.
+* **Квота Data API** — 10 000 одиниць на добу на проєкт Google; сторінка
+  коментарів = 1. Витрата кожного виклику — у `detail` обліку (`units=…`),
+  проба ключа — 1 одиниця раз на `YOUTUBE_PROBE_INTERVAL_MS` (10 хв).
+* **Бот-перевірка.** З IP датацентру YouTube часто просить «Sign in to confirm
+  you're not a bot» — тоді `get_transcript` → `platform_blocked`, а стан
+  адаптера лишається `ok` з `limited` і причиною. Ні інший `player_client`, ні
+  PO-токен цього не знімають (перевірено 2026-09-24); коментарі (Data API)
+  перевірка не зачіпає.
 
 Інтерфейс — `src/adapters/types.ts` (як `Publisher` в exopost: `probe` ≈
 `verify`, `AdapterError.retryable`, реєстр за іменем).
@@ -118,7 +151,9 @@ pnpm install && pnpm test && pnpm typecheck
 ```
 
 Ворота (`typecheck` + `test`) — у стадії `build` образу. Міграції — dbmate
-(`apps/api/db/migrations`), бінарник у образі.
+(`apps/api/db/migrations`), бінарник у образі. yt-dlp — запінений реліз з
+перевіркою sha256 (`ADD --checksum` у Dockerfile); тести підміняють його
+справжнім процесом-скриптом.
 
 ## Ліцензія
 
@@ -127,4 +162,5 @@ MIT — `LICENSE`. Бюджет відповіді — перенесення н
 (сам форк лишається під GPL-3.0 апстріму, і його код сюди не переноситься:
 обхід дня в адаптері — власна реалізація). Інструмент під адаптером —
 [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), з ним relic
-говорить лише по HTTP.
+говорить лише по HTTP. yt-dlp (Unlicense) — окремий бінарник в образі, relic
+запускає його процесом.

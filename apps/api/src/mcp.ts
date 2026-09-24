@@ -14,7 +14,8 @@ import { z } from 'zod';
 import type { CallContext, Service } from './service.js';
 import { ServiceError } from './service.js';
 
-const REF = 'Conversation ref from list_chats (the "ref" field, adapter:account:id).';
+const REF =
+  'Conversation ref from list_chats (the "ref" field, adapter:account:id). A YouTube video is youtube:public:<video id or video URL> — build it yourself, list_chats does not list videos.';
 
 function ok(value: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
@@ -42,7 +43,7 @@ export function buildMcpServer(service: Service, ctx: CallContext, version: stri
     'list_chats',
     {
       description:
-        'List the conversations this key may read (Telegram and other platforms behind the gateway): ref, name, type, platform, last message date. Use this first; pass a ref as `conversation` to the other tools. An empty list means nothing has been opened to this key yet.',
+        'List the conversations this key may read (Telegram and other platforms behind the gateway): ref, name, type, platform, last message date. Use this first; pass a ref as `conversation` to the other tools. An empty list means nothing has been opened to this key yet. YouTube videos are not listed: their ref is youtube:public:<video id or URL>.',
       inputSchema: {
         limit: z.number().int().positive().optional().describe('Most conversations to return (the server caps it, 100 by default).'),
         offset: z.number().int().nonnegative().optional().describe('Skip this many (for paging).'),
@@ -56,7 +57,7 @@ export function buildMcpServer(service: Service, ctx: CallContext, version: stri
     'get_messages',
     {
       description:
-        'Messages of one conversation, newest first, in a compact form (id, date in UTC, from, text, reply_to, media). One answer is capped by the server (count and bytes); when truncated is true, pass `next` back as `cursor` for older ones. Read only as far back as the question needs — prefer search_messages or get_messages_by_date on big conversations.',
+        'Messages of one conversation, newest first, in a compact form (id, date in UTC, from, text, reply_to, media). For a YouTube video these are its comments, each thread followed by the replies YouTube returns with it (reply_to = parent comment). One answer is capped by the server (count and bytes); when truncated is true, pass `next` back as `cursor` for older ones. Read only as far back as the question needs — prefer search_messages or get_messages_by_date on big conversations.',
       inputSchema: {
         conversation: z.string().min(3).describe(REF),
         limit: z.number().int().positive().optional().describe('Most messages to return (default 30; the server caps it, 100 by default).'),
@@ -104,6 +105,25 @@ export function buildMcpServer(service: Service, ctx: CallContext, version: stri
           limit: args.limit,
         }),
       ),
+  );
+
+  server.registerTool(
+    'get_transcript',
+    {
+      description:
+        'Transcript of a YouTube video: segments of up to ~30 s with start/end in seconds from the start. The author\'s captions when there are any, otherwise YouTube speech recognition (source: manual | auto). The answer is capped by the server; when truncated is true, pass `next` back as `cursor` for the rest — stop as soon as the question is answered. Error platform_blocked means YouTube refuses the server (bot check) for this video: do not retry.',
+      inputSchema: {
+        conversation: z.string().min(3).describe(REF),
+        language: z
+          .string()
+          .optional()
+          .describe('Caption language code (uk, en, pt-BR). Default: the video\'s own language. Ignored with cursor.'),
+        cursor: z.string().optional().describe('`next` from the previous answer: continues the transcript.'),
+      },
+      annotations: readOnly,
+    },
+    (args) =>
+      call(() => service.getTranscript(ctx, { conversation: args.conversation, language: args.language, cursor: args.cursor })),
   );
 
   return server;

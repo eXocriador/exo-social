@@ -14,15 +14,18 @@ import {
   clampLimit,
   fitChats,
   fitMessages,
+  fitSegments,
   type ChatPage,
   type Limits,
   type Page,
+  type SegmentPage,
 } from './budget.js';
 import { AdapterError, type Adapter, type AdapterRegistry } from './adapters/types.js';
 import type { CallRecord, Ledger, Outcome } from './ledger.js';
+import { meterDetail, metered, type Meter } from './meter.js';
 import type { Quota } from './quota.js';
 import { grantFor, isWildcard, ScopeUnavailable, type Grant, type ScopeStore } from './scope.js';
-import { parseRef, type Conversation, type ConversationRef } from './shape.js';
+import { formatRef, parseRef, type Conversation, type ConversationRef } from './shape.js';
 
 export interface CallContext {
   product: string;
@@ -34,6 +37,7 @@ export type ServiceErrorCode =
   | 'bad_request'
   | 'budget_exhausted'
   | 'rate_limited'
+  | 'platform_blocked'
   | 'adapter_expired'
   | 'adapter_down'
   | 'scope_unavailable';
@@ -43,6 +47,8 @@ const STATUS: Record<ServiceErrorCode, number> = {
   bad_request: 400,
   budget_exhausted: 429,
   rate_limited: 429,
+  // Не 503: шлюз і вхід цілі, платформа відмовляє саме IP сервера. Не повторювати.
+  platform_blocked: 502,
   adapter_expired: 503,
   adapter_down: 503,
   scope_unavailable: 503,
@@ -92,6 +98,11 @@ export interface ByDateArgs {
   timezone?: string | undefined;
   limit?: number | undefined;
 }
+export interface TranscriptArgs {
+  conversation: string;
+  language?: string | undefined;
+  cursor?: string | undefined;
+}
 
 /** Розмов, які явний рядок області може назвати. Більше — вже не «список», а `*`. */
 const MAX_EXPLICIT = 200;
@@ -107,8 +118,20 @@ export function createService(deps: ServiceDeps) {
   type Result<T> = { value: T; items: number; truncated: boolean };
 
   /**
+   * Ref, як його назвав викликач → канонічний, ДО області й обліку: YouTube
+   * приймає і URL відео, і id, а рядок області й облік мусять бачити одне.
+   * Не впізнаний адаптером id лишається як є — адаптер відмовить сам.
+   */
+  function canonical(conversation: string): string {
+    const ref = parseRef(conversation);
+    const id = ref ? adapters.get(ref.adapter)?.canonicalId?.(ref.id) : null;
+    return ref && id ? formatRef({ ...ref, id }) : conversation;
+  }
+
+  /**
    * Обгортка кожного інструмента: стеля, облік, переклад помилок. `body`
    * отримує вже прочитану область; `conversation` — лише для рядка обліку.
+   * Витрати платформи за виклик (одиниці квоти, запуски yt-dlp) — у `detail`.
    */
   async function run<T>(
     ctx: CallContext,
@@ -144,10 +167,10 @@ export function createService(deps: ServiceDeps) {
       throw new ServiceError('budget_exhausted', `daily cap of ${verdict.cap} calls for this product is spent — degrade, do not retry today`);
     }
 
+    const meter: Meter = {};
     try {
-      const grants = await scope.grants(ctx.product, 'read');
-      const out = await body(grants);
-      finish('ok', { items: out.items, bytes: byteLength(out.value), truncated: out.truncated });
+      const out = await metered(meter, async () => body(await scope.grants(ctx.product, 'read')));
+      finish('ok', { items: out.items, bytes: byteLength(out.value), truncated: out.truncated, detail: meterDetail(meter) });
       return out.value;
     } catch (err) {
       const e = toServiceError(err);
@@ -158,12 +181,15 @@ export function createService(deps: ServiceDeps) {
             ? 'bad_request'
             : e.code === 'rate_limited'
               ? 'rate_limited'
-              : e.code === 'adapter_expired'
-                ? 'expired'
-                : e.code === 'adapter_down' || e.code === 'scope_unavailable'
-                  ? 'unavailable'
-                  : 'error';
-      finish(outcome, { detail: e.message });
+              : e.code === 'platform_blocked'
+                ? 'blocked'
+                : e.code === 'adapter_expired'
+                  ? 'expired'
+                  : e.code === 'adapter_down' || e.code === 'scope_unavailable'
+                    ? 'unavailable'
+                    : 'error';
+      const spent = meterDetail(meter);
+      finish(outcome, { detail: spent ? `${e.message} [${spent}]` : e.message });
       throw e;
     }
   }
@@ -179,6 +205,8 @@ export function createService(deps: ServiceDeps) {
           return new ServiceError('bad_request', err.message);
         case 'rate_limited':
           return new ServiceError('rate_limited', `${err.message} — retry later`);
+        case 'blocked':
+          return new ServiceError('platform_blocked', `${err.message} — do not retry`);
         case 'expired':
           return new ServiceError('adapter_expired', `adapter login rejected: ${err.message}`);
         case 'down':
@@ -266,29 +294,31 @@ export function createService(deps: ServiceDeps) {
   }
 
   async function getMessages(ctx: CallContext, args: GetMessagesArgs): Promise<Page & { conversation: string }> {
-    return run(ctx, 'get_messages', args.conversation, async (grants) => {
-      const t = target(grants, args.conversation);
+    const conversation = canonical(args.conversation);
+    return run(ctx, 'get_messages', conversation, async (grants) => {
+      const t = target(grants, conversation);
       const limit = clampLimit(limits, args.limit, 30);
       const batch = await t.adapter.getMessages(t.ref.account, t.ref.id, { limit, cursor: args.cursor || null });
       const page = fitMessages(limits, batch.messages, {
         maybeMore: batch.maybeMore,
         cursorOf: (m) => t.adapter.cursorOf(m),
-        extra: { conversation: args.conversation },
+        extra: { conversation },
       });
       return { value: page, items: page.count, truncated: page.truncated };
     });
   }
 
   async function searchMessages(ctx: CallContext, args: SearchArgs): Promise<Page & { conversation: string; query: string }> {
-    return run(ctx, 'search_messages', args.conversation, async (grants) => {
+    const conversation = canonical(args.conversation);
+    return run(ctx, 'search_messages', conversation, async (grants) => {
       const query = args.query.trim();
       if (!query) throw new ServiceError('bad_request', 'query is empty');
-      const t = target(grants, args.conversation);
+      const t = target(grants, conversation);
       const limit = clampLimit(limits, args.limit, 20);
       const batch = await t.adapter.searchMessages(t.ref.account, t.ref.id, query.slice(0, 200), limit);
       const page = fitMessages(limits, batch.messages, {
         maybeMore: batch.maybeMore,
-        extra: { conversation: args.conversation, query: query.slice(0, 200) },
+        extra: { conversation, query: query.slice(0, 200) },
       });
       return { value: page, items: page.count, truncated: page.truncated };
     });
@@ -298,8 +328,9 @@ export function createService(deps: ServiceDeps) {
     ctx: CallContext,
     args: ByDateArgs,
   ): Promise<Page & { conversation: string; date: string; timezone: string }> {
-    return run(ctx, 'get_messages_by_date', args.conversation, async (grants) => {
-      const t = target(grants, args.conversation);
+    const conversation = canonical(args.conversation);
+    return run(ctx, 'get_messages_by_date', conversation, async (grants) => {
+      const t = target(grants, conversation);
       const limit = clampLimit(limits, args.limit, limits.maxItems);
       const batch = await t.adapter.getMessagesByDate(t.ref.account, t.ref.id, {
         date: args.date,
@@ -309,7 +340,39 @@ export function createService(deps: ServiceDeps) {
       const page = fitMessages(limits, batch.messages, {
         maybeMore: batch.maybeMore,
         note: 'The day holds more messages than fit in one answer; the newest were dropped. Use get_messages with a cursor, or search_messages, for the rest.',
-        extra: { conversation: args.conversation, date: args.date, timezone: batch.timezone },
+        extra: { conversation, date: args.date, timezone: batch.timezone },
+      });
+      return { value: page, items: page.count, truncated: page.truncated };
+    });
+  }
+
+  /**
+   * Транскрипт відео — окремий інструмент, не «повідомлення» (connectors.md §3):
+   * сегменти з часом від початку, той самий бюджет, `next` — продовження.
+   */
+  async function getTranscript(
+    ctx: CallContext,
+    args: TranscriptArgs,
+  ): Promise<
+    SegmentPage & {
+      conversation: string;
+      title: string | null;
+      duration: number | null;
+      language: string | null;
+      source: 'manual' | 'auto' | 'none';
+    }
+  > {
+    const conversation = canonical(args.conversation);
+    return run(ctx, 'get_transcript', conversation, async (grants) => {
+      const t = target(grants, conversation);
+      if (!t.adapter.getTranscript) throw new ServiceError('bad_request', `adapter ${t.adapter.name} has no transcripts`);
+      const tr = await t.adapter.getTranscript(t.ref.account, t.ref.id, {
+        language: args.language ?? null,
+        cursor: args.cursor || null,
+      });
+      const page = fitSegments(limits, tr.segments, {
+        cursorAfter: tr.cursorAfter,
+        extra: { conversation, title: tr.title, duration: tr.duration, language: tr.language, source: tr.source },
       });
       return { value: page, items: page.count, truncated: page.truncated };
     });
@@ -329,7 +392,7 @@ export function createService(deps: ServiceDeps) {
     return { product: ctx.product, usedToday: await quota.used(ctx.product), cap: quota.cap };
   }
 
-  return { listChats, getMessages, searchMessages, getMessagesByDate, ownScope, usage };
+  return { listChats, getMessages, searchMessages, getMessagesByDate, getTranscript, ownScope, usage };
 }
 
 export type Service = ReturnType<typeof createService>;

@@ -8,7 +8,7 @@
  * адаптер лише перекладає його відповідь у спільну форму (shape.ts). Політики
  * тут немає: ні області, ні обліку, ні бюджету — це service.ts, один раз на всі.
  */
-import type { Conversation, Message } from '../shape.js';
+import type { Conversation, Message, Segment } from '../shape.js';
 
 /**
  * Стан входу адаптера.
@@ -16,11 +16,14 @@ import type { Conversation, Message } from '../shape.js';
  *   expired  — вхід відхилено (пароль змінено, сесія протухла, токен
  *              відкликано): сам не полагодиться, потрібна людина;
  *   down     — інструмент недосяжний (мережа, 5xx);
- *   unknown  — ще жодної проби (лише на старті, до першої відповіді).
- * Стеля частоти платформи (FloodWait, 429) — НЕ стан: це штатна подія, і вона
- * лише додає `limited` до поточного стану (connectors.md §3, «Здоров'я»).
+ *   unknown  — ще жодної проби (лише на старті, до першої відповіді);
+ *   skip     — входу немає з волі конфігу (youtube без YOUTUBE_API_KEY): частина
+ *              інструментів вимкнена, і це не вирок — як `skip` у перевірках kit.
+ * Стеля частоти платформи (FloodWait, 429, вичерпана квота) і відмова платформи
+ * IP сервера (бот-перевірка YouTube) — НЕ стан: це штатні події, вони лише
+ * додають `limited` з причиною до поточного стану (connectors.md §3, «Здоров'я»).
  */
-export type LoginState = 'ok' | 'expired' | 'down' | 'unknown';
+export type LoginState = 'ok' | 'expired' | 'down' | 'unknown' | 'skip';
 
 export interface AccountHealth {
   adapter: string;
@@ -42,6 +45,11 @@ export type AdapterErrorKind =
   | 'down'
   /** Стеля частоти платформи: повторити пізніше. */
   | 'rate_limited'
+  /**
+   * Платформа відмовляє САМЕ серверу (бот-перевірка YouTube для IP датацентру):
+   * повтор не допоможе, вхід адаптера цілий. Не вирок здоров'ю — `limited`.
+   */
+  | 'blocked'
   /** Аргумент не прийнято (курсор, дата, часовий пояс). */
   | 'bad_request';
 
@@ -78,6 +86,24 @@ export interface DayBatch extends MessageBatch {
 }
 
 /**
+ * Транскрипт — окрема форма, не «повідомлення»: у мовленні немає ні автора,
+ * ні відповіді, ні id, а є час від початку відео (connectors.md §3).
+ */
+export interface TranscriptBatch {
+  title: string | null;
+  /** Тривалість відео, секунди. */
+  duration: number | null;
+  /** Мова доріжки (`uk`, `en`); null — субтитрів у відео немає зовсім. */
+  language: string | null;
+  /** manual — субтитри автора; auto — розпізнавання мовлення YouTube; none — немає. */
+  source: 'manual' | 'auto' | 'none';
+  /** Сегменти ВІД курсора до кінця доріжки; бюджет ріже вже в сервісі. */
+  segments: Segment[];
+  /** Курсор на сегменти, що йдуть ПІСЛЯ i-го з `segments`. */
+  cursorAfter(i: number): string;
+}
+
+/**
  * Один адаптер. Методи приймають `id` розмови В АДАПТЕРІ (третя частина ref
  * шлюзу), а віддають розмови вже з повним ref шлюзу.
  */
@@ -100,6 +126,19 @@ export interface Adapter {
   getMessagesByDate(account: string, id: string, day: { date: string; timezone: string | null; limit: number }): Promise<DayBatch>;
   /** Курсор на сторінку, старішу за це повідомлення. */
   cursorOf(m: Message): string;
+
+  /**
+   * Канонічний id розмови з того, що дав викликач (YouTube: URL → 11 символів
+   * id), або null — не впізнано. Сервіс кличе ДО області й обліку: інакше
+   * `youtube:public:<URL>` і `youtube:public:<id>` були б різними розмовами.
+   */
+  canonicalId?(id: string): string | null;
+  /** Транскрипт розмови (відео). Лише в адаптерів, у яких він є. */
+  getTranscript?(
+    account: string,
+    id: string,
+    opts: { language: string | null; cursor: string | null },
+  ): Promise<TranscriptBatch>;
 
   /** Відпустити вхід на зупинці (вихід із сесії), якщо адаптер це вміє. */
   close?(): Promise<void>;

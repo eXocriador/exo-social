@@ -39,6 +39,17 @@ export interface Message {
   cut?: boolean;
 }
 
+/**
+ * Сегмент транскрипту: час від початку відео, секунди (до десятих), і текст.
+ * Рядки субтитрів зливаються в сегменти до ~30 с — інакше година мовлення
+ * була б тисячею рядків по три слова, і стеля кількості різала б раніше за байти.
+ */
+export interface Segment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 /** Розібраний ref шлюзу. */
 export interface ConversationRef {
   adapter: string;

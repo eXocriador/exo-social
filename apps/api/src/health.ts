@@ -12,7 +12,7 @@
  */
 import type { AccountHealth, AdapterRegistry, LoginState } from './adapters/types.js';
 
-const WORST: LoginState[] = ['expired', 'down', 'unknown', 'ok'];
+const WORST: LoginState[] = ['expired', 'down', 'unknown', 'skip', 'ok'];
 
 /** Найгірший стан серед акаунтів адаптера: один протухлий акаунт — адаптер непридатний. */
 export function worst(states: LoginState[]): LoginState {
@@ -20,7 +20,10 @@ export function worst(states: LoginState[]): LoginState {
   return 'ok';
 }
 
-/** Чи валить цей стан пробу готовності. `unknown` — лише до першої проби, і він не вирок. */
+/**
+ * Чи валить цей стан пробу готовності. `unknown` — лише до першої проби, і він
+ * не вирок; `skip` — вхід вимкнений конфігом свідомо.
+ */
 export function failsReady(state: LoginState): boolean {
   return state === 'expired' || state === 'down';
 }

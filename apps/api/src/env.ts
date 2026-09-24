@@ -69,6 +69,39 @@ export const schema = {
   }),
   TELEGRAM_ARCHIVE_PASS: str({ optional: true, secret: true, describe: 'Пароль акаунта переглядача.' }),
 
+  // ── адаптер youtube ──
+  YOUTUBE_API_KEY: str({
+    optional: true,
+    secret: true,
+    describe:
+      'Ключ YouTube Data API v3 (Google Cloud → Credentials → API key, обмежений цим API і IP\n' +
+      'сервера). Порожньо — коментарі й назви відео вимкнені (checks.youtube = skip), транскрипти лишаються.',
+  }),
+  YOUTUBE_PROBE_VIDEO: str({
+    optional: true,
+    describe:
+      'id будь-якого публічного відео для проби ключа (videos.list, 1 одиниця квоти). Обов\'язковий разом\n' +
+      'із ключем. Тут, а не в коді: репо публічне. Видалене відео пробі не шкодить — порожня відповідь теж 200.',
+    example: '<11 символів id>',
+  }),
+  YOUTUBE_PROBE_INTERVAL_MS: num({
+    default: 600_000,
+    min: 60_000,
+    omitExample: true,
+    describe: 'Як часто проба бачить ключ Data API (10 хв = 144 одиниці на добу з 10 000).',
+  }),
+  YTDLP_PATH: str({
+    optional: true,
+    omitExample: true,
+    describe: 'Бінарник yt-dlp (транскрипти). Задає образ (Dockerfile); порожньо — транскриптів немає.',
+  }),
+  YTDLP_TIMEOUT_MS: num({
+    default: 60_000,
+    min: 5_000,
+    omitExample: true,
+    describe: 'Скільки чекати на один запуск yt-dlp, перш ніж убити процес.',
+  }),
+
   ADAPTER_PROBE_INTERVAL_MS: num({
     default: 60_000,
     min: 5_000,
@@ -91,6 +124,14 @@ export interface TelegramArchiveEnv {
   pass: string;
 }
 
+export interface YoutubeEnv {
+  apiKey: string | null;
+  probeVideo: string | null;
+  probeIntervalMs: number;
+  ytdlpPath: string | null;
+  ytdlpTimeoutMs: number;
+}
+
 export interface Env {
   port: number;
   host: string;
@@ -101,6 +142,7 @@ export interface Env {
   dailyCapPerProduct: number;
   limits: { maxItems: number; maxBytes: number };
   telegramArchive: TelegramArchiveEnv | null;
+  youtube: YoutubeEnv | null;
   probeIntervalMs: number;
   version: string;
   logLevel: string;
@@ -132,6 +174,28 @@ function telegramArchive(raw: EnvOf<typeof schema>): TelegramArchiveEnv | null {
   };
 }
 
+/**
+ * youtube увімкнений, щойно є хоч одна половина — ключ Data API або yt-dlp:
+ * у проді образ завжди дає YTDLP_PATH, тож адаптер є завжди, а без ключа він
+ * `skip` (коментарів немає, транскрипти є). Ключ без відео для проби —
+ * помилка, а не «проба вимкнена».
+ */
+function youtube(raw: EnvOf<typeof schema>): YoutubeEnv | null {
+  const key = raw.YOUTUBE_API_KEY || null;
+  const probe = raw.YOUTUBE_PROBE_VIDEO || null;
+  const ytdlp = raw.YTDLP_PATH || null;
+  if (!key && !ytdlp) return null;
+  if (key && !probe) throw new Error('YOUTUBE_API_KEY без YOUTUBE_PROBE_VIDEO: пробі ключа потрібне id публічного відео');
+  if (probe && !/^[A-Za-z0-9_-]{11}$/.test(probe)) throw new Error('YOUTUBE_PROBE_VIDEO — 11 символів id відео');
+  return {
+    apiKey: key,
+    probeVideo: probe,
+    probeIntervalMs: raw.YOUTUBE_PROBE_INTERVAL_MS,
+    ytdlpPath: ytdlp,
+    ytdlpTimeoutMs: raw.YTDLP_TIMEOUT_MS,
+  };
+}
+
 export function readEnv(source: EnvSource = process.env): Env {
   const raw = defineEnv(schema, source);
   return {
@@ -144,6 +208,7 @@ export function readEnv(source: EnvSource = process.env): Env {
     dailyCapPerProduct: raw.DAILY_CAP_PER_PRODUCT,
     limits: { maxItems: raw.MAX_ITEMS, maxBytes: raw.MAX_RESPONSE_BYTES },
     telegramArchive: telegramArchive(raw),
+    youtube: youtube(raw),
     probeIntervalMs: raw.ADAPTER_PROBE_INTERVAL_MS,
     version: raw.APP_VERSION,
     logLevel: raw.LOG_LEVEL,

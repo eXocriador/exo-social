@@ -8,6 +8,7 @@
 import { createDb, createRedis } from '@exo/kit/infra';
 import { createLogger } from '@exo/kit/log';
 import { createTelegramArchive } from './adapters/telegram-archive/index.js';
+import { createYoutube } from './adapters/youtube/index.js';
 import { createRegistry, type Adapter } from './adapters/types.js';
 import { readEnv, type Env } from './env.js';
 import { createAdapterHealth } from './health.js';
@@ -55,6 +56,17 @@ if (env.telegramArchive) {
       user: env.telegramArchive.user,
       pass: env.telegramArchive.pass,
       loginBackoffMs: env.probeIntervalMs,
+    }),
+  );
+}
+if (env.youtube) {
+  adapterList.push(
+    createYoutube({
+      apiKey: env.youtube.apiKey,
+      probeVideo: env.youtube.probeVideo,
+      probeIntervalMs: env.youtube.probeIntervalMs,
+      ytdlpPath: env.youtube.ytdlpPath,
+      ytdlpTimeoutMs: env.youtube.ytdlpTimeoutMs,
     }),
   );
 }

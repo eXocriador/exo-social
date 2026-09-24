@@ -142,7 +142,7 @@ describe('MCP (Streamable HTTP, stateless)', () => {
       payload: body as Record<string, unknown>,
     });
 
-  it('initialize → tools/list: чотири інструменти читання, запису немає', async () => {
+  it('initialize → tools/list: п\'ять інструментів читання, запису немає', async () => {
     const a = app({ value: 'ok' }, [all]);
     const init = await rpc(a, {
       jsonrpc: '2.0',
@@ -154,7 +154,7 @@ describe('MCP (Streamable HTTP, stateless)', () => {
     expect(init.json().result.serverInfo.name).toBe('relic');
     const list = await rpc(a, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     const names = list.json().result.tools.map((t: { name: string }) => t.name).sort();
-    expect(names).toEqual(['get_messages', 'get_messages_by_date', 'list_chats', 'search_messages']);
+    expect(names).toEqual(['get_messages', 'get_messages_by_date', 'get_transcript', 'list_chats', 'search_messages']);
   });
 
   it('tools/call list_chats — область ключа', async () => {
