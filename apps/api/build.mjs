@@ -36,8 +36,9 @@ const here = new URL('.', import.meta.url);
 const pkg = JSON.parse(readFileSync(new URL('package.json', here), 'utf8'));
 
 await build({
-  entryPoints: [new URL('src/index.ts', here).pathname],
-  outfile: new URL('dist/index.js', here).pathname,
+  // Два входи — сервер і stdio-міст MCP (mcp-stdio.ts): кожен окремим файлом у dist.
+  entryPoints: [new URL('src/index.ts', here).pathname, new URL('src/mcp-stdio.ts', here).pathname],
+  outdir: new URL('dist', here).pathname,
   bundle: true,
   platform: 'node',
   format: 'esm',

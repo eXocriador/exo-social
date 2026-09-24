@@ -1,17 +1,22 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createRedis } from '@exo/kit/infra';
-import { createLogger } from '@exo/kit/log';
-import { createTelemetry } from '@exo/kit/telemetry';
-import pg from 'pg';
-import { readEnv, type Env } from './env.js';
-import { buildServer, type Check } from './server.js';
-
 /**
- * Точка входу — єдине місце, де конфіг (env.ts) стає екземплярами фабрик.
- * Міграції тут НЕ котяться: це робить exo-deploy (`MIGRATE=dbmate`)
- * одноразовим контейнером з цього ж образу до підняття нового сервера.
+ * exo-social — шлюз від продуктів до соцмереж і месенджерів.
+ *
+ * Точка входу — єдине місце, де конфіг (env.ts) стає екземплярами. Міграції
+ * тут НЕ котяться: це робить exo-deploy (`MIGRATE=dbmate`) одноразовим
+ * контейнером з цього ж образу до підняття нового сервера.
  */
+import { createDb, createRedis } from '@exo/kit/infra';
+import { createLogger } from '@exo/kit/log';
+import { createTelegramArchive } from './adapters/telegram-archive/index.js';
+import { createRegistry, type Adapter } from './adapters/types.js';
+import { readEnv, type Env } from './env.js';
+import { createAdapterHealth } from './health.js';
+import { KeyConfigError, parseProductKeys } from './keys.js';
+import { createLedger } from './ledger.js';
+import { createQuota } from './quota.js';
+import { createScopeStore } from './scope.js';
+import { buildServer } from './server.js';
+import { createService } from './service.js';
 
 function loadEnv(): Env {
   try {
@@ -24,40 +29,89 @@ function loadEnv(): Env {
 }
 
 const env = loadEnv();
-if (!env.webDist) env.webDist = resolve(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+const { logInfo, logWarn, logError } = createLogger({ service: 'exo-social', level: env.logLevel, openobserve: null });
 
-const { logger, logWarn, logError } = createLogger({ service: 'exo-social-api', openobserve: null });
+let keys;
+try {
+  keys = parseProductKeys(env.productKeys);
+} catch (error) {
+  if (error instanceof KeyConfigError) {
+    process.stderr.write(`exo-social: ${error.message}\n`);
+    process.exit(2);
+  }
+  throw error;
+}
+logInfo('boot.keys', { products: keys.products });
 
-// Один шов на весь продукт: з'явиться DSN — telemetry.setReporter(...) тут, без правок у дротах.
-const telemetry = createTelemetry({
-  logError: (event, error, fields) =>
-    logWarn(event, { ...fields, err: error instanceof Error ? error.message : String(error) }),
-  logWarn: (event, fields) => logWarn(event, fields),
+const db = createDb({ url: env.databaseUrl, reportError: (err, c) => logError('db.error', err, { ...c }) });
+const redis = createRedis({ url: env.redisUrl, reportError: (err, c) => logError('redis.error', err, { ...c }) });
+
+const adapterList: Adapter[] = [];
+if (env.telegramArchive) {
+  adapterList.push(
+    createTelegramArchive({
+      baseUrl: env.telegramArchive.url,
+      account: env.telegramArchive.account,
+      user: env.telegramArchive.user,
+      pass: env.telegramArchive.pass,
+      loginBackoffMs: env.probeIntervalMs,
+    }),
+  );
+}
+const adapters = createRegistry(adapterList);
+logInfo('boot.adapters', { adapters: [...adapters.keys()] });
+
+const adapterHealth = createAdapterHealth({ adapters, intervalMs: env.probeIntervalMs, logInfo, logWarn });
+const service = createService({
+  adapters,
+  scope: createScopeStore(db),
+  ledger: createLedger(db, logWarn),
+  quota: createQuota(redis, env.dailyCapPerProduct, logWarn),
+  limits: env.limits,
+  logWarn,
 });
 
-const redis = createRedis({ url: env.redisUrl, globalKey: '__redis', reportError: telemetry.reportError });
-const pool = env.databaseUrl ? new pg.Pool({ connectionString: env.databaseUrl, max: 5 }) : null;
-
-// Готовність = те, що налаштовано. Незадана змінна — не перевірка, що завжди червона.
-const checks: Record<string, Check> = {};
-if (pool) checks.postgres = async () => (await pool.query('SELECT 1')).rowCount === 1;
-const redisClient = redis.client;
-if (redisClient) checks.redis = async () => (await redisClient.ping()) === 'PONG';
-
-const app = buildServer({ env, checks });
+const app = buildServer({
+  version: env.version,
+  keys,
+  service,
+  adapterHealth,
+  checks: {
+    postgres: async () => (await db.query((sql) => sql`SELECT 1`)) !== null,
+    redis: async () => {
+      if (!redis.client) return 'skip';
+      try {
+        return (await redis.client.ping()) === 'PONG';
+      } catch {
+        return false;
+      }
+    },
+  },
+  // Postgres — обов'язковий: без області шлюз лише відмовляє. Redis — ні:
+  // стелі fail-open, і шлюз без них працює.
+  required: ['postgres'],
+  logLevel: env.logLevel,
+});
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    adapterHealth.stop();
     void app
       .close()
-      .then(() => pool?.end())
-      .then(() => process.exit(0));
+      .then(() => Promise.all(adapterList.map((a) => a.close?.())))
+      .finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5_000).unref();
   });
 }
 
+// Перша проба входу — ДО listen: /health/ready з першої секунди каже правду,
+// а не `unknown`.
+await adapterHealth.sweep();
+adapterHealth.start();
+
 try {
   await app.listen({ port: env.port, host: env.host });
-  logger.info({ version: env.version, checks: Object.keys(checks) }, 'exo-social api');
+  logInfo('boot.listening', { port: env.port, version: env.version, adapters: adapterHealth.states() });
 } catch (error) {
   logError('listen_failed', error);
   process.exit(1);

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # Згенеровано `exo new exo-social --kind api` з архетипу F3 @exo/kit v0.11.0
-# (templates/docker/node-api): плейсхолдери підставлені, стадія SPA і рядки
-# розкоментовані. Далі це файл продукту; `exo upgrade`
+# (templates/docker/node-api): плейсхолдери підставлені. Стадії SPA немає — шлюз
+# без вебу; dbmate і міграції — в образі (MIGRATE=dbmate). Далі це файл
+# продукту; `exo upgrade`
 # показує, чим він розійшовся з архетипом нового тега.
 #
 # АРХЕТИП F3 — Node-сервіс з HTTP (Fastify/API), бандл esbuild, pnpm-монорепо
@@ -39,9 +40,7 @@ FROM base AS build
 COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/api ./apps/api
-# Маніфести ІНШИХ робочих областей — лише щоб pnpm бачив усіх, хто в локу; без
-# них `--frozen-lockfile` відмовляє. По рядку на кожну:
-COPY apps/web/package.json ./apps/web/package.json
+# Інших робочих областей немає: шлюз без SPA (apps/web знятий, README репо).
 # Сервіс з його робочими областями плюс корінь. Сусідній застосунок (Vite, Next)
 # сюди не ставиться: ні збірці, ні воротам він не потрібен.
 RUN pnpm install --offline --frozen-lockfile --filter "@exo-social/api..." --filter "{.}"
@@ -56,22 +55,6 @@ RUN pnpm --filter @exo-social/api run typecheck \
  && pnpm --filter @exo-social/api run test
 RUN pnpm --filter @exo-social/api run build
 
-# ── SPA, яку роздає той самий процес (необов'язково) ────────────────────────
-# Канонічна родина (план §3.2) — Fastify, що сам роздає зібрану Vite-SPA:
-# один процес, один образ (filebrowser; `exo new --kind api`). Сервіс без SPA —
-# не розкоментовувати. Заповнити: apps/web (тека SPA, напр. apps/web),
-# @exo-social/web (її name). Окрема стадія, а не `build`: там install відфільтрований
-# до сервісу, і ні Vite з Tailwind не платять за ворота API, ні навпаки.
-# Виконується вона ЛИШЕ тому, що рантайм з неї копіює (`COPY --from=web` нижче):
-# без того рядка BuildKit пропустить стадію мовчки — разом із її воротами.
-FROM base AS web
-COPY packages ./packages
-COPY apps/web ./apps/web
-COPY apps/api/package.json ./apps/api/package.json
-RUN pnpm install --offline --frozen-lockfile --filter "@exo-social/web..." --filter "{.}"
-RUN pnpm --filter @exo-social/web run typecheck \
- && pnpm --filter @exo-social/web run build
-
 # ── лише продові залежності сервісу ─────────────────────────────────────────
 # Без `...`: код робочих областей уже вклеєний у бандл, їхні пакети рантайму не
 # потрібні (посилання на теку пакета лишається, його ніхто не імпортує).
@@ -85,7 +68,6 @@ RUN pnpm --filter @exo-social/web run typecheck \
 FROM base AS prod-deps
 COPY packages ./packages
 COPY apps/api/package.json ./apps/api/package.json
-COPY apps/web/package.json ./apps/web/package.json
 RUN rm -rf node_modules \
  && pnpm install --offline --frozen-lockfile --prod --filter @exo-social/api
 
@@ -98,14 +80,11 @@ COPY --from=prod-deps /repo/apps/api/node_modules ./node_modules
 # `type: module` з маніфесту — інакше Node прочитав би бандл як CommonJS.
 COPY apps/api/package.json ./
 COPY --from=build /repo/apps/api/dist ./dist
-# SPA (стадія `web` вище) — туди ж, де вона лежить у дереві репо: сервіс шукає
-# її відносно свого dist (`../../web/dist`). Цей рядок і змушує стадію виконатись.
-COPY --from=web /repo/apps/web/dist /repo/apps/web/dist
 # MIGRATE=dbmate у deploy.conf запускає dbmate З ЦЬОГО ОБРАЗУ (робоча тека —
 # ця), тож бінарник і міграції їдуть сюди, і схема з кодом — один коміт за
 # побудовою (exo-ai, netwatch). БД немає — обидва рядки прибрати.
-# COPY --from=amacneil/dbmate:2.35.1 /usr/local/bin/dbmate /usr/local/bin/dbmate
-# COPY apps/api/db/migrations ./db/migrations
+COPY --from=amacneil/dbmate:2.35.1 /usr/local/bin/dbmate /usr/local/bin/dbmate
+COPY apps/api/db/migrations ./db/migrations
 
 # ARG в останній стадії: хеш міняється з кожним комітом і не має інвалідувати
 # встановлення й ворота вище. Ціна — новий верхній шар на кожному коміті, тобто

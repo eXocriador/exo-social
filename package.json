@@ -10,7 +10,6 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "dev:api": "pnpm --filter @exo-social/api dev",
-    "dev:web": "pnpm --filter @exo-social/web dev"
+    "dev:api": "pnpm --filter @exo-social/api dev"
   }
 }
