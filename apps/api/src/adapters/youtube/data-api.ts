@@ -24,6 +24,11 @@ export interface DataApiOptions {
   baseUrl?: string | undefined;
   fetch?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
+  /**
+   * Власна добова стеля шлюзу (guard.ts): false — запиту не буде. Квота Google
+   * так ніколи не вичерпується до кінця, і проба ключа завжди має з чого жити.
+   */
+  takeUnit?: (() => Promise<boolean>) | undefined;
 }
 
 interface GoogleError {
@@ -98,6 +103,9 @@ export class DataApi {
   async get<T>(resource: string, params: Record<string, string | number | undefined>): Promise<T> {
     const url = new URL(`${this.base}/${resource}`);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
+    if (this.opts.takeUnit && !(await this.opts.takeUnit())) {
+      throw new AdapterError('rate_limited', 'власна добова стеля шлюзу на одиниці Data API вичерпана (квоту Google бережемо) — завтра, UTC');
+    }
     charge('units');
     let res: Response;
     try {

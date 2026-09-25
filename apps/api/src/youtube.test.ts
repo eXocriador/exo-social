@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { byteLength, DEFAULT_LIMITS } from './budget.js';
 import { classify } from './adapters/youtube/data-api.js';
+import { DEFAULT_GUARD, Guard, memoryKv, redisKv, type GuardLimits } from './adapters/youtube/guard.js';
 import { createYoutube, videoIdOf } from './adapters/youtube/index.js';
 import { classifyRun, pickTrack, spawnYtDlp, toSegments, type VideoInfo } from './adapters/youtube/ytdlp.js';
 import { AdapterError, createRegistry, type Adapter } from './adapters/types.js';
@@ -141,7 +142,9 @@ function fakeYtDlp(mode: 'ok' | 'bot' | 'none' | 'slow'): string {
 
 // ── обв'язка ────────────────────────────────────────────────────────────────
 
-function yt(over: { api?: Partial<Api>; ytdlp?: 'ok' | 'bot' | 'none' | 'slow' | null; key?: string | null; now?: () => number } = {}) {
+function yt(
+  over: { api?: Partial<Api>; ytdlp?: 'ok' | 'bot' | 'none' | 'slow' | null; key?: string | null; now?: () => number; guard?: Guard } = {},
+) {
   const api: Api = { key: 'right', threads: 250, calls: [], ...over.api };
   const ytdlpPath = over.ytdlp === null ? null : fakeYtDlp(over.ytdlp ?? 'ok');
   const adapter = createYoutube({
@@ -153,6 +156,7 @@ function yt(over: { api?: Partial<Api>; ytdlp?: 'ok' | 'bot' | 'none' | 'slow' |
     fetch: fakeApi(api),
     apiBase: 'https://api.test/youtube/v3',
     now: over.now,
+    guard: over.guard,
   });
   return { adapter, api, ytdlpPath };
 }
@@ -468,6 +472,8 @@ describe('транскрипт', () => {
     expect(pickTrack(info, 'en')).toEqual({ language: 'en', source: 'manual', url: 'm-en' });
     expect(pickTrack({ ...info, language: null, automatic_captions: { en: t('a-en') } }, null)).toEqual({ language: 'en', source: 'manual', url: 'm-en' });
     expect(pickTrack({ ...info, language: null, subtitles: {}, automatic_captions: { de: t('a-de') } }, null)).toBeNull();
+    // Автоперекладу немає навіть на прохання: саме такі запити дали IP сервера 429.
+    expect(pickTrack({ ...info, subtitles: {} }, 'en')).toBeNull();
   });
 
   it('json3 → сегменти до 30 с, порожні рядки й переноси — геть', () => {
@@ -497,5 +503,115 @@ describe('конфіг', () => {
   it('ключ без відео для проби — помилка старту, а не «проба вимкнена»', () => {
     expect(() => readEnv({ ...base, YOUTUBE_API_KEY: 'k' })).toThrow(/YOUTUBE_PROBE_VIDEO/);
     expect(readEnv({ ...base, YOUTUBE_API_KEY: 'k', YOUTUBE_PROBE_VIDEO: VID }).youtube).toMatchObject({ apiKey: 'k', probeVideo: VID });
+  });
+});
+
+// ── запобіжник ──────────────────────────────────────────────────────────────
+
+describe('запобіжник: YouTube бачить шлюз рідко і розмірено', () => {
+  const limits = (over: Partial<GuardLimits> = {}): GuardLimits => ({ ...DEFAULT_GUARD, minGapMs: 0, ...over });
+
+  it('стеля запусків на годину — далі шлюз відмовляє сам', async () => {
+    const g = new Guard(memoryKv(), limits({ ytdlpPerHour: 2 }));
+    expect((await g.admitYtDlp()).ok).toBe(true);
+    expect((await g.admitYtDlp()).ok).toBe(true);
+    const third = await g.admitYtDlp();
+    expect(third).toMatchObject({ ok: false, reason: expect.stringMatching(/на годину/) });
+  });
+
+  it('проміжок між запусками — чекає, а не шле впритул', async () => {
+    const waits: number[] = [];
+    let t = 1_000_000;
+    const g = new Guard(memoryKv(() => t), limits({ minGapMs: 10_000 }), () => t, async (ms) => void waits.push(ms));
+    await g.admitYtDlp();
+    t += 3_000;
+    await g.admitYtDlp();
+    expect(waits).toEqual([7_000]);
+  });
+
+  it('429 — одразу пауза: наступний транскрипт не доходить до YouTube, здоров\'я — limited', async () => {
+    let runs = 0;
+    const guard = new Guard(memoryKv(), limits());
+    const adapter = createYoutube({
+      apiKey: null,
+      probeVideo: null,
+      probeIntervalMs: 600_000,
+      ytdlpPath: null,
+      guard,
+      runYtDlp: async () => {
+        runs++;
+        return { code: 1, stdout: '', stderr: 'ERROR: HTTP Error 429: Too Many Requests', timedOut: false };
+      },
+    });
+    await expect(adapter.getTranscript!('public', VID, { language: null, cursor: null })).rejects.toMatchObject({ kind: 'rate_limited' });
+    await expect(adapter.getTranscript!('public', 'BBBBBBBBBBB', { language: null, cursor: null })).rejects.toMatchObject({
+      kind: 'rate_limited',
+      message: expect.stringMatching(/на паузі/),
+    });
+    expect(runs).toBe(1);
+    const h = adapter.health('public');
+    expect(h.limited).toBe(true);
+    expect(h.reason).toMatch(/паузі запобіжника/);
+    expect(failsReady(h.state)).toBe(false);
+  });
+
+  it('бот-перевірки поспіль — пауза після tripAfter; успіх між ними скидає лічильник', async () => {
+    const g = new Guard(memoryKv(), limits({ tripAfter: 3 }));
+    await g.record('bot');
+    await g.record('bot');
+    await g.record('ok');
+    await g.record('bot');
+    await g.record('bot');
+    expect((await g.admitYtDlp()).ok).toBe(true);
+    await g.record('bot');
+    expect(await g.admitYtDlp()).toMatchObject({ ok: false, reason: expect.stringMatching(/3 бот-перевірок/) });
+  });
+
+  it('відео з бот-перевіркою не питається вдруге добу', async () => {
+    let runs = 0;
+    const adapter = createYoutube({
+      apiKey: null,
+      probeVideo: null,
+      probeIntervalMs: 600_000,
+      ytdlpPath: null,
+      guard: new Guard(memoryKv(), limits()),
+      runYtDlp: async () => {
+        runs++;
+        return { code: 1, stdout: '', stderr: "ERROR: [youtube] x: Sign in to confirm you're not a bot.", timedOut: false };
+      },
+    });
+    const { service, rows } = serviceOver(adapter);
+    for (let i = 0; i < 3; i++) {
+      await expect(service.getTranscript(ctx, { conversation: `youtube:public:${VID}` })).rejects.toMatchObject({ code: 'platform_blocked' });
+    }
+    expect(runs).toBe(1);
+    await settle();
+    // Облік: yt-dlp лише в першому рядку.
+    expect(rows.map((r) => /ytdlp=1/.test(r.detail ?? ''))).toEqual([true, false, false]);
+  });
+
+  it('власна добова стеля одиниць Data API — запит до Google не йде', async () => {
+    const { adapter, api } = yt({ guard: new Guard(memoryKv(), limits({ unitsPerDay: 2 })) });
+    await adapter.getMessages('public', VID, { limit: 5, cursor: null });
+    await adapter.getMessages('public', VID, { limit: 5, cursor: null });
+    const before = api.calls.length;
+    await expect(adapter.getMessages('public', VID, { limit: 5, cursor: null })).rejects.toMatchObject({
+      kind: 'rate_limited',
+      message: expect.stringMatching(/власна добова стеля/),
+    });
+    expect(api.calls.length).toBe(before);
+    expect(adapter.health('public')).toMatchObject({ state: 'ok', limited: true });
+  });
+
+  it('Redis упав — стелі тримає пам\'ять, а не «без стель»', async () => {
+    const boom = async () => {
+      throw new Error('ECONNREFUSED');
+    };
+    const dead = { get: boom, set: boom, incr: boom, expire: boom, del: boom } as never;
+    const errors: unknown[] = [];
+    const g = new Guard(redisKv(dead, 'relic:youtube:', (e) => errors.push(e)), limits({ ytdlpPerHour: 1 }));
+    expect((await g.admitYtDlp()).ok).toBe(true);
+    expect((await g.admitYtDlp()).ok).toBe(false);
+    expect(errors.length).toBeGreaterThan(0);
   });
 });

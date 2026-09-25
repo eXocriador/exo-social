@@ -102,6 +102,17 @@ export const schema = {
     describe: 'Скільки чекати на один запуск yt-dlp, перш ніж убити процес.',
   }),
 
+  // Запобіжник youtube (adapters/youtube/guard.ts): стелі на ВЕСЬ шлюз, стан у Redis.
+  YTDLP_MAX_PER_HOUR: num({ default: 20, min: 1, omitExample: true, describe: 'Найбільше запусків yt-dlp на годину на весь шлюз.' }),
+  YTDLP_MAX_PER_DAY: num({ default: 100, min: 1, omitExample: true, describe: 'Найбільше запусків yt-dlp на добу UTC на весь шлюз.' }),
+  YTDLP_MIN_GAP_MS: num({ default: 10_000, min: 0, omitExample: true, describe: 'Найменший проміжок між запусками yt-dlp.' }),
+  YOUTUBE_DAILY_UNITS: num({
+    default: 5_000,
+    min: 200,
+    omitExample: true,
+    describe: 'Власна добова стеля одиниць Data API (квота Google — 10 000): запас лишається завжди.',
+  }),
+
   ADAPTER_PROBE_INTERVAL_MS: num({
     default: 60_000,
     min: 5_000,
@@ -130,6 +141,7 @@ export interface YoutubeEnv {
   probeIntervalMs: number;
   ytdlpPath: string | null;
   ytdlpTimeoutMs: number;
+  guard: { ytdlpPerHour: number; ytdlpPerDay: number; minGapMs: number; unitsPerDay: number };
 }
 
 export interface Env {
@@ -193,6 +205,12 @@ function youtube(raw: EnvOf<typeof schema>): YoutubeEnv | null {
     probeIntervalMs: raw.YOUTUBE_PROBE_INTERVAL_MS,
     ytdlpPath: ytdlp,
     ytdlpTimeoutMs: raw.YTDLP_TIMEOUT_MS,
+    guard: {
+      ytdlpPerHour: raw.YTDLP_MAX_PER_HOUR,
+      ytdlpPerDay: raw.YTDLP_MAX_PER_DAY,
+      minGapMs: raw.YTDLP_MIN_GAP_MS,
+      unitsPerDay: raw.YOUTUBE_DAILY_UNITS,
+    },
   };
 }
 

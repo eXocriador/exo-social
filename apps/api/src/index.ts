@@ -8,6 +8,7 @@
 import { createDb, createRedis } from '@exo/kit/infra';
 import { createLogger } from '@exo/kit/log';
 import { createTelegramArchive } from './adapters/telegram-archive/index.js';
+import { DEFAULT_GUARD, Guard, memoryKv, redisKv } from './adapters/youtube/guard.js';
 import { createYoutube } from './adapters/youtube/index.js';
 import { createRegistry, type Adapter } from './adapters/types.js';
 import { readEnv, type Env } from './env.js';
@@ -67,6 +68,13 @@ if (env.youtube) {
       probeIntervalMs: env.youtube.probeIntervalMs,
       ytdlpPath: env.youtube.ytdlpPath,
       ytdlpTimeoutMs: env.youtube.ytdlpTimeoutMs,
+      // Стан запобіжника — у Redis (переживає деплой); без Redis — у пам'яті, але стелі лишаються.
+      guard: new Guard(
+        redis.client
+          ? redisKv(redis.client, 'relic:youtube:', (err) => logWarn('youtube.guard_redis', { error: (err as Error)?.message }))
+          : memoryKv(),
+        { ...DEFAULT_GUARD, ...env.youtube.guard },
+      ),
     }),
   );
 }

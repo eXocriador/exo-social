@@ -32,6 +32,7 @@ import {
   type TranscriptBatch,
 } from '../types.js';
 import { DataApi } from './data-api.js';
+import { DEFAULT_GUARD, Guard, memoryKv } from './guard.js';
 import { fetchInfo, languagesOf, pickTrack, spawnYtDlp, toSegments, type YtDlpRunner } from './ytdlp.js';
 
 export const NAME = 'youtube';
@@ -58,8 +59,13 @@ export interface YoutubeOptions {
   fetch?: typeof fetch | undefined;
   apiBase?: string | undefined;
   runYtDlp?: YtDlpRunner | undefined;
+  /** Запобіжник (guard.ts); за замовчуванням — у пам'яті процесу з DEFAULT_GUARD. */
+  guard?: Guard | undefined;
   now?: (() => number) | undefined;
 }
+
+/** Скільки тримати транскрипт у кеші: він не змінюється, а кожен промах — похід у YouTube. */
+const TRANSCRIPT_TTL_SEC = 24 * 3600;
 
 // ── id і URL ────────────────────────────────────────────────────────────────
 
@@ -180,7 +186,7 @@ const isTranscriptCursor = (v: unknown): v is TranscriptCursor =>
   Number.isInteger((v as TranscriptCursor).o) &&
   (v as TranscriptCursor).o >= 0;
 
-/** Маленький LRU з TTL: транскрипти (гортання курсором без нового yt-dlp) і назви відео. */
+/** Маленький LRU з TTL: назви відео і позиції коментарів для курсора (транскрипти — у кеші запобіжника, guard.ts). */
 class Lru<V> {
   private readonly map = new Map<string, { v: V; at: number }>();
   constructor(
@@ -218,14 +224,17 @@ interface CachedTranscript {
 
 export function createYoutube(opts: YoutubeOptions): Adapter {
   const now = opts.now ?? Date.now;
-  const api = opts.apiKey ? new DataApi({ key: opts.apiKey, baseUrl: opts.apiBase, fetch: opts.fetch }) : null;
+  const guard = opts.guard ?? new Guard(memoryKv(now), DEFAULT_GUARD, now);
+  const api = opts.apiKey
+    ? new DataApi({ key: opts.apiKey, baseUrl: opts.apiBase, fetch: opts.fetch, takeUnit: () => guard.takeUnit() })
+    : null;
   const ytdlpTimeoutMs = opts.ytdlpTimeoutMs ?? 60_000;
+  // Один процес за раз: і пам'ять, і обережність — YouTube бачить не більше одного запиту плеєра.
   const run: YtDlpRunner | null =
     opts.runYtDlp ??
-    (opts.ytdlpPath ? spawnYtDlp({ path: opts.ytdlpPath, timeoutMs: ytdlpTimeoutMs, concurrency: opts.ytdlpConcurrency ?? 2 }) : null);
+    (opts.ytdlpPath ? spawnYtDlp({ path: opts.ytdlpPath, timeoutMs: ytdlpTimeoutMs, concurrency: opts.ytdlpConcurrency ?? 1 }) : null);
   const fetchImpl = opts.fetch ?? fetch;
 
-  const transcripts = new Lru<CachedTranscript>(16, 60 * 60_000, now);
   const titles = new Lru<Conversation>(256, 60 * 60_000, now);
   /** Де лежить відданий коментар: сторінка й позиція — для cursorOf. */
   const positions = new Lru<{ p: string | null; s: number }>(5_000, 60 * 60_000, now);
@@ -241,13 +250,17 @@ export function createYoutube(opts: YoutubeOptions): Adapter {
   let lastApiContact = 0;
 
   const health = (): AccountHealth => {
-    const reasons = [stateReason, quotaLimited, ytdlpBlocked].filter((r): r is string => r !== null);
+    const paused =
+      guard.pausedUntil > now()
+        ? `yt-dlp на паузі запобіжника до ${new Date(guard.pausedUntil).toISOString().slice(11, 16)}Z (${guard.pauseReason ?? 'YouTube відмовляв'})`
+        : null;
+    const reasons = [stateReason, quotaLimited, paused ?? ytdlpBlocked].filter((r): r is string => r !== null);
     return {
       adapter: NAME,
       account: ACCOUNT,
       state,
       reason: reasons.length ? reasons.join('; ') : null,
-      limited: quotaLimited !== null || (ytdlpBlocked !== null && run !== null),
+      limited: quotaLimited !== null || paused !== null || (ytdlpBlocked !== null && run !== null),
       checkedAt,
     };
   };
@@ -466,17 +479,31 @@ export function createYoutube(opts: YoutubeOptions): Adapter {
       if (want && !/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(want)) {
         throw new AdapterError('bad_request', 'language — код мови, як-от uk, en, pt-BR');
       }
-      const key = `${vid}|${want ?? ''}`;
-      let t = transcripts.get(key);
+      const key = `transcript:${vid}|${want ?? ''}`;
+      // Порядок — від найдешевшого для YouTube: кеш → пам'ять відмов → стелі й
+      // пауза запобіжника → і лише тоді запит.
+      let t = await guard.cacheGet<CachedTranscript>(key);
       if (!t) {
         if (!run) throw new AdapterError('down', 'yt-dlp не налаштований (YTDLP_PATH) — транскриптів немає');
+        if (await guard.isBlocked(vid)) {
+          throw new AdapterError('blocked', 'YouTube відмовив серверу в цьому відео менш ніж добу тому — шлюз не питає вдруге; повтор не допоможе');
+        }
+        const admitted = await guard.admitYtDlp();
+        if (!admitted.ok) throw new AdapterError('rate_limited', admitted.reason);
         let info;
         try {
           info = await fetchInfo(run, vid, ytdlpTimeoutMs);
           ytdlpBlocked = null;
+          await guard.record('ok');
         } catch (err) {
-          if (err instanceof AdapterError && err.kind === 'blocked' && /бот-перевірка/.test(err.message)) {
-            ytdlpBlocked = `yt-dlp: YouTube просить вхід (бот-перевірка) для IP сервера — транскрипти частини відео недоступні (останнє: ${new Date(now()).toISOString()})`;
+          if (err instanceof AdapterError && err.kind === 'blocked') {
+            await guard.markBlocked(vid);
+            if (/бот-перевірка/.test(err.message)) {
+              ytdlpBlocked = `yt-dlp: YouTube просить вхід (бот-перевірка) для IP сервера — транскрипти частини відео недоступні (останнє: ${new Date(now()).toISOString()})`;
+              await guard.record('bot');
+            }
+          } else if (err instanceof AdapterError && err.kind === 'rate_limited') {
+            await guard.record('429');
           }
           throw err;
         }
@@ -493,7 +520,10 @@ export function createYoutube(opts: YoutubeOptions): Adapter {
           } catch {
             throw new AdapterError('down', 'доріжка субтитрів недосяжна');
           }
-          if (res.status === 429) throw new AdapterError('rate_limited', 'YouTube відповів 429 на доріжку субтитрів');
+          if (res.status === 429) {
+            await guard.record('429');
+            throw new AdapterError('rate_limited', 'YouTube відповів 429 на доріжку субтитрів — запобіжник поставив yt-dlp на паузу');
+          }
           if (!res.ok) throw new AdapterError('down', `доріжка субтитрів: ${res.status}`);
           segments = toSegments(await res.json().catch(() => null));
         }
@@ -504,7 +534,7 @@ export function createYoutube(opts: YoutubeOptions): Adapter {
           source: track?.source ?? 'none',
           segments,
         };
-        transcripts.set(key, t);
+        await guard.cacheSet(key, t, TRANSCRIPT_TTL_SEC);
       }
       const lang = want;
       return {

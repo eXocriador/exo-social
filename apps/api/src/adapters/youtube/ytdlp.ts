@@ -193,11 +193,12 @@ const json3 = (list: Track[] | undefined): string | null => {
 
 /**
  * Яку доріжку брати.
- *   Мову названо: ручні субтитри цією мовою → розпізнані в оригіналі (`xx-orig`)
- *   → автопереклад на неї.
+ *   Мову названо: ручні субтитри цією мовою → розпізнані в оригіналі (`xx-orig`).
  *   Не названо: ручні мовою відео → розпізнані мовою відео → будь-які ручні →
- *   будь-які розпізнані в оригіналі. Автопереклад сам не обирається: він
- *   видає переклад за мовлення.
+ *   будь-які розпізнані в оригіналі.
+ * **Автоперекладу немає зовсім** (з 2026-09-25): він видає переклад за
+ * мовлення, а головне — саме запити перекладених доріжок дали IP сервера 429
+ * на timedtext (журнал 59). Перекласти може продукт — через blackgate.
  * `null` — у відео доріжки немає (або немає названою мовою).
  */
 export function pickTrack(info: VideoInfo, want: string | null): Choice | null {
@@ -211,7 +212,7 @@ export function pickTrack(info: VideoInfo, want: string | null): Choice | null {
     const url = json3(auto[key]);
     return url ? { language: key.replace(/-orig$/, ''), source: 'auto', url } : null;
   };
-  if (want) return m(want) ?? a(`${want}-orig`) ?? a(want);
+  if (want) return m(want) ?? a(`${want}-orig`);
 
   const lang = info.language;
   if (lang) {
