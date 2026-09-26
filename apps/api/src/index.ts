@@ -16,7 +16,7 @@ import { createAdapterHealth } from './health.js';
 import { KeyConfigError, parseProductKeys } from './keys.js';
 import { createLedger } from './ledger.js';
 import { createQuota } from './quota.js';
-import { createScopeStore } from './scope.js';
+import { createScopeRefs, createScopeStore } from './scope.js';
 import { buildServer } from './server.js';
 import { createService } from './service.js';
 
@@ -81,7 +81,13 @@ if (env.youtube) {
 const adapters = createRegistry(adapterList);
 logInfo('boot.adapters', { adapters: [...adapters.keys()] });
 
-const adapterHealth = createAdapterHealth({ adapters, intervalMs: env.probeIntervalMs, logInfo, logWarn });
+const adapterHealth = createAdapterHealth({
+  adapters,
+  intervalMs: env.probeIntervalMs,
+  scopeRefs: createScopeRefs(db),
+  logInfo,
+  logWarn,
+});
 const service = createService({
   adapters,
   scope: createScopeStore(db),

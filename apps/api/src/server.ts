@@ -67,7 +67,14 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       body.checks[name] = state;
       if (failsReady(state)) ok = false;
     }
-    body.status = ok ? 'ok' : 'fail';
+    // Доступ — поруч, але не вирок готовності: порожній доступ законний до
+    // рішення власника. Видно `status: "degraded"` при 200.
+    let degraded = false;
+    for (const [name, state] of Object.entries(adapterHealth.accessStates())) {
+      body.checks[name] = state;
+      if (state === 'degraded') degraded = true;
+    }
+    body.status = !ok ? 'fail' : degraded ? 'degraded' : 'ok';
     return reply
       .code(ok ? 200 : 503)
       .header('cache-control', 'no-store')
@@ -107,6 +114,15 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         state: h.state,
         reason: h.reason,
         limited: h.limited,
+        checked_at: h.checkedAt,
+      })),
+      access: adapterHealth.accessSnapshot().map((h) => ({
+        adapter: h.adapter,
+        account: h.account,
+        state: h.state,
+        visible: h.visible,
+        missing: h.missing,
+        reason: h.reason,
         checked_at: h.checkedAt,
       })),
     }),

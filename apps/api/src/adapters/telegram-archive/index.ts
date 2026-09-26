@@ -214,6 +214,18 @@ export function createTelegramArchive(opts: TelegramArchiveOptions): Adapter {
       };
     },
 
+    async visibleRefs(account) {
+      own(account);
+      // Стеля переглядача — 1000 на сторінку; білий список шлюзу — одиниці чатів.
+      const body = (await observed(() => client.get('/api/chats', { limit: 1000, offset: 0 }))) as {
+        chats?: unknown;
+        total?: unknown;
+      };
+      if (!Array.isArray(body.chats)) throw new AdapterError('down', 'переглядач віддав не список чатів');
+      const refs = body.chats.map((c) => toConversation(opts.account, c)?.ref).filter((r): r is string => !!r);
+      return { total: typeof body.total === 'number' ? body.total : refs.length, refs };
+    },
+
     async getConversation(account, id) {
       own(account);
       const c = toConversation(opts.account, await observed(() => client.get(`/api/chats/${encodeURIComponent(id)}`)));

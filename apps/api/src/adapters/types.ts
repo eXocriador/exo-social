@@ -140,8 +140,35 @@ export interface Adapter {
     opts: { language: string | null; cursor: string | null },
   ): Promise<TranscriptBatch>;
 
+  /**
+   * Що акаунт адаптера бачить зараз: скільки розмов і їхні ref шлюзу. Лише в
+   * адаптерів зі списком розмов (YouTube його не має). З цього здоров'я доступу
+   * (health.ts) бачить порожній доступ і ref області, яких в інструменті немає.
+   */
+  visibleRefs?(account: string): Promise<{ total: number; refs: string[] }>;
+
   /** Відпустити вхід на зупинці (вихід із сесії), якщо адаптер це вміє. */
   close?(): Promise<void>;
+}
+
+/**
+ * Доступ акаунта — окремо від входу (connectors.md §3, «Здоров'я»):
+ *   ok       — акаунт бачить хоч одну розмову, і кожен явний ref області є серед них;
+ *   degraded — вхід живий, але видно нуль розмов або область називає ref, яких
+ *              в інструменті немає (чат зник з архіву, його забрали з білого
+ *              списку). Законний стан до рішення власника, тому НЕ 503;
+ *   unknown  — ще не дивились або вхід не ok (тоді вирок дає вхід, не доступ).
+ */
+export interface AccessHealth {
+  adapter: string;
+  account: string;
+  state: 'ok' | 'degraded' | 'unknown';
+  /** Скільки розмов бачить акаунт; null — не дивились. */
+  visible: number | null;
+  /** Явні ref областей, яких акаунт не бачить. */
+  missing: string[];
+  reason: string | null;
+  checkedAt: string | null;
 }
 
 export type AdapterRegistry = ReadonlyMap<string, Adapter>;

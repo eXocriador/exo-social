@@ -77,6 +77,21 @@ const opts = (v: Viewer, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+describe('visibleRefs — що бачить акаунт переглядача', () => {
+  it('рахує й віддає ref шлюзу; порожній білий список — нуль', async () => {
+    const v = viewer({ chats: [{ id: 1, ref: 'REF1', type: 'private', first_name: 'A' }] });
+    const a = createTelegramArchive(opts(v));
+    expect(await a.visibleRefs!('acc')).toEqual({ total: 1, refs: ['telegram-archive:acc:REF1'] });
+    v.chats = [];
+    expect(await a.visibleRefs!('acc')).toEqual({ total: 0, refs: [] });
+  });
+
+  it('чужий акаунт — not_found, як і інші інструменти', async () => {
+    const a = createTelegramArchive(opts(viewer()));
+    await expect(a.visibleRefs!('other')).rejects.toMatchObject({ kind: 'not_found' });
+  });
+});
+
 describe('кука Secure — руками', () => {
   it('береться з Set-Cookie і шлеться заголовком Cookie', async () => {
     const v = viewer({ chats: [{ id: 1, ref: 'REF1', type: 'private', first_name: 'A' }] });

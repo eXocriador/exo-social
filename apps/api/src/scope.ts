@@ -12,7 +12,8 @@
  * користь викликача.
  */
 import type { Db } from '@exo/kit/infra';
-import { formatRef, type ConversationRef } from './shape.js';
+import type { ScopeRef } from './health.js';
+import { formatRef, parseRef, type ConversationRef } from './shape.js';
 
 export type Access = 'read' | 'write';
 
@@ -63,5 +64,26 @@ export function createScopeStore(db: Db): ScopeStore {
       if (!out.ok) throw new ScopeUnavailable(out.reason);
       return out.rows.map((r) => ({ ...r, conversations: [...r.conversations] }));
     },
+  };
+}
+
+/**
+ * Явні ref усіх областей (не `*`) — для здоров'я доступу: ref, якого акаунт
+ * адаптера не бачить, — мертвий рядок області. Кидає, якщо БД не відповіла:
+ * тоді здоров'я судить лише кількість видимих розмов.
+ */
+export function createScopeRefs(db: Db): () => Promise<ScopeRef[]> {
+  return async () => {
+    const out = await db.tryQuery(
+      (sql) => sql<{ ref: string }[]>`
+        SELECT DISTINCT unnest(conversations) AS ref
+        FROM social_scope
+        WHERE conversations <> ARRAY['*']::text[]`,
+    );
+    if (!out.ok) throw new ScopeUnavailable(out.reason);
+    return out.rows.flatMap((r) => {
+      const p = r.ref === '*' ? null : parseRef(r.ref);
+      return p ? [{ adapter: p.adapter, account: p.account, ref: formatRef(p) }] : [];
+    });
   };
 }

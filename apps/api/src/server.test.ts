@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createRegistry, type AccountHealth, type Adapter, type LoginState } from './adapters/types.js';
-import { createAdapterHealth } from './health.js';
+import { createAdapterHealth, judgeAccess, type ScopeRef } from './health.js';
 import { parseProductKeys } from './keys.js';
 import { buildServer } from './server.js';
 import { createService } from './service.js';
@@ -107,6 +107,101 @@ describe('проби', () => {
   it('/v1/adapters — стан з причиною', async () => {
     const r = await app({ value: 'expired' }).inject({ url: '/v1/adapters', headers: auth });
     expect(r.json().adapters[0]).toMatchObject({ adapter: A, account: 'acc', state: 'expired', reason: 'переглядач відхилив вхід' });
+  });
+});
+
+describe('доступ: порожній і мертвий ref — degraded, не 503', () => {
+  const R1 = `${A}:acc:R1`;
+  const DEAD = `${A}:acc:GONE`;
+
+  function withAccess(state: { value: LoginState }, seen: { refs: string[] }, scope: ScopeRef[] = []) {
+    const adapter: Adapter = {
+      ...adapterIn(state),
+      visibleRefs: async () => ({ total: seen.refs.length, refs: seen.refs }),
+    };
+    const adapters = createRegistry([adapter]);
+    const adapterHealth = createAdapterHealth({ adapters, intervalMs: 60_000, scopeRefs: async () => scope });
+    const server = buildServer({
+      version: 'abc1234',
+      keys: parseProductKeys(`claude:${KEY}`),
+      service: createService({
+        adapters,
+        scope: { grants: async () => [] },
+        ledger: { record: async () => {} },
+        quota: { cap: 10, consume: async () => ({ allowed: true, used: 1, cap: 10 }), used: async () => 1 },
+        limits: { maxItems: 100, maxBytes: 32 << 10 },
+      }),
+      adapterHealth,
+      checks: { postgres: async () => true },
+      required: ['postgres'],
+      logger: false,
+    });
+    return { server, adapterHealth };
+  }
+
+  it('judgeAccess: нуль розмов, мертвий ref, чисто', () => {
+    const base = { adapter: A, account: 'acc' };
+    expect(judgeAccess(base, { total: 0, refs: [] }, [], 't')).toMatchObject({ state: 'degraded', visible: 0, missing: [] });
+    const dead = judgeAccess(base, { total: 1, refs: [R1] }, [{ ...base, ref: DEAD }, { ...base, ref: R1 }], 't');
+    expect(dead).toMatchObject({ state: 'degraded', visible: 1, missing: [DEAD] });
+    // ref іншого акаунта цього акаунта не стосується
+    expect(judgeAccess(base, { total: 1, refs: [R1] }, [{ adapter: A, account: 'other', ref: DEAD }], 't').state).toBe('ok');
+  });
+
+  it('до першого прогону — unknown, і це не degraded', async () => {
+    const { server } = withAccess({ value: 'ok' }, { refs: [] });
+    const r = await server.inject({ url: '/health/ready' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ status: 'ok', checks: { [`${A}.access`]: 'unknown' } });
+  });
+
+  it('нуль видимих розмов — 200, status degraded, причина в /v1/adapters', async () => {
+    const { server, adapterHealth } = withAccess({ value: 'ok' }, { refs: [] });
+    await adapterHealth.sweep();
+    const r = await server.inject({ url: '/health/ready' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ status: 'degraded', checks: { [A]: 'ok', [`${A}.access`]: 'degraded' } });
+    // Kuma дивиться на ключове слово — перевіряємо саме рядок тіла.
+    expect(r.body).not.toContain('"status":"ok"');
+    const a = (await server.inject({ url: '/v1/adapters', headers: auth })).json();
+    expect(a.access[0]).toMatchObject({ adapter: A, account: 'acc', state: 'degraded', visible: 0, missing: [] });
+  });
+
+  it('ref області, якого акаунт не бачить — degraded з цим ref', async () => {
+    const { server, adapterHealth } = withAccess({ value: 'ok' }, { refs: [R1] }, [{ adapter: A, account: 'acc', ref: DEAD }]);
+    await adapterHealth.sweep();
+    expect((await server.inject({ url: '/health/ready' })).json().status).toBe('degraded');
+    const a = (await server.inject({ url: '/v1/adapters', headers: auth })).json();
+    expect(a.access[0]).toMatchObject({ state: 'degraded', visible: 1, missing: [DEAD] });
+  });
+
+  it('видно й усе на місці — ok, і рядок "status":"ok" є', async () => {
+    const { server, adapterHealth } = withAccess({ value: 'ok' }, { refs: [R1] }, [{ adapter: A, account: 'acc', ref: R1 }]);
+    await adapterHealth.sweep();
+    const r = await server.inject({ url: '/health/ready' });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toContain('"status":"ok"');
+  });
+
+  it('вхід протух — 503 fail, доступ unknown (вирок дає вхід)', async () => {
+    const { server, adapterHealth } = withAccess({ value: 'expired' }, { refs: [] });
+    await adapterHealth.sweep();
+    const r = await server.inject({ url: '/health/ready' });
+    expect(r.statusCode).toBe(503);
+    expect(r.json()).toMatchObject({ status: 'fail', checks: { [`${A}.access`]: 'unknown' } });
+  });
+
+  it('область не прочиталась — судимо лише кількість', async () => {
+    const adapter: Adapter = { ...adapterIn({ value: 'ok' }), visibleRefs: async () => ({ total: 1, refs: [R1] }) };
+    const adapterHealth = createAdapterHealth({
+      adapters: createRegistry([adapter]),
+      intervalMs: 60_000,
+      scopeRefs: async () => {
+        throw new Error('pg down');
+      },
+    });
+    await adapterHealth.sweep();
+    expect(adapterHealth.accessStates()).toEqual({ [`${A}.access`]: 'ok' });
   });
 });
 
